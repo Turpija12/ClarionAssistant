@@ -1,0 +1,24 @@
+<AddIn name="Clarion Assistant" author="John Hickey" description="AI-powered Clarion IDE assistant: embedded Claude Code terminal, MCP tools, LSP integration, CodeGraph, and IDE automation">
+  <Manifest>
+    <Identity name="ClarionAssistant" version="1.0.0"/>
+  </Manifest>
+  <Runtime>
+    <Import assembly="ClarionAssistant.dll"/>
+  </Runtime>
+
+  <Path name="/SharpDevelop/Workbench/Pads">
+    <Pad id="ClassHelper" category="Tools" title="Class Helper"
+         icon="PadIcons.ClassBrowser" shortcut="Control|Alt|M"
+         class="ClarionAssistant.ClassHelperPad"/>
+    <Pad id="ClaudeChat" category="Tools" title="Claude Chat"
+         icon="PadIcons.Output" shortcut="Control|Alt|C"
+         class="ClarionAssistant.ClaudeChatPad"/>
+  </Path>
+
+  <Path name="/Workspace/Tools">
+    <MenuItem id="ShowClassHelper" label="Class Helper"
+              class="ClarionAssistant.ShowClassHelperCommand"/>
+    <MenuItem id="ShowClaudeChat" label="Claude Chat"
+              class="ClarionAssistant.ShowClaudeChatCommand"/>
+  </Path>
+</AddIn>

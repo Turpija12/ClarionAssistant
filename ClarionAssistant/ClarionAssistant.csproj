@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>ClarionAssistant</RootNamespace>
+    <AssemblyName>ClarionAssistant</AssemblyName>
+    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <PlatformTarget>x86</PlatformTarget>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <PlatformTarget>x86</PlatformTarget>
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Web" />
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+    <Reference Include="System.Data.SQLite">
+      <HintPath>C:\Clarion12\accessory\bin\System.Data.SQLite.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="ICSharpCode.Core">
+      <HintPath>C:\Clarion12\bin\ICSharpCode.Core.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="ICSharpCode.SharpDevelop">
+      <HintPath>C:\Clarion12\bin\ICSharpCode.SharpDevelop.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="ClassHelperPad.cs" />
+    <Compile Include="ShowClassHelperCommand.cs" />
+    <Compile Include="ClaudeChatPad.cs" />
+    <Compile Include="ShowClaudeChatCommand.cs" />
+    <Compile Include="ClaudeChatControl.cs" />
+    <Compile Include="ClassHelperControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="ClassHelperControl.Designer.cs">
+      <DependentUpon>ClassHelperControl.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Services\ClarionClassParser.cs" />
+    <Compile Include="Services\EditorService.cs" />
+    <Compile Include="Services\SettingsService.cs" />
+    <Compile Include="Services\McpServer.cs" />
+    <Compile Include="Services\McpJsonRpc.cs" />
+    <Compile Include="Services\McpToolRegistry.cs" />
+    <Compile Include="Services\ClarionVersionService.cs" />
+    <Compile Include="Services\LspClient.cs" />
+    <Compile Include="Services\AppTreeService.cs" />
+    <Compile Include="Services\IdeReflectionService.cs" />
+    <Compile Include="Dialogs\ClaudeChatSettingsDialog.cs" />
+    <Compile Include="Terminal\NativeMethods.cs" />
+    <Compile Include="Terminal\ConPtyTerminal.cs" />
+    <Compile Include="Terminal\WebViewTerminalRenderer.cs" />
+    <Compile Include="Terminal\WebView2EnvironmentCache.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="ClarionAssistant.addin">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Terminal\terminal.html">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Terminal\clarion-assistant-prompt.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2">
+      <Version>1.0.3800.47</Version>
+    </PackageReference>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
