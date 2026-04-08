@@ -258,4 +258,4 @@ cd ClarionAssistant
 
 ## License
 
-Proprietary &mdash; &copy; 2026 ClarionLive. All rights reserved.
+[MIT License](LICENSE) &mdash; &copy; 2026 ClarionLive.
