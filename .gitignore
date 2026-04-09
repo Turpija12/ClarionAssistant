@@ -11,6 +11,9 @@ installer/output/
 installer/docgraph.db
 installer/preview-icon.png
 
+# FTS5-enabled SQLite binaries (required, not available via NuGet)
+!ClarionAssistant/lib/sqlite-fts5/*.dll
+
 # Claude Code local settings
 ClarionAssistant/.claude/settings.local.json
 ClarionAssistant/.claude/continuation.md
