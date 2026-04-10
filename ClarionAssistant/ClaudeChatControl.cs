@@ -191,6 +191,24 @@ namespace ClarionAssistant
                 case "evaluateCode": OnEvaluateCode(sender, EventArgs.Empty); break;
                 case "settings": OnSettings(sender, EventArgs.Empty); break;
                 case "createClass": OnCreateClass(); break;
+                case "openGitHub": OnOpenGitHub(); break;
+            }
+        }
+
+        private void OnOpenGitHub()
+        {
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("https://github.com/ClarionLive/ClarionAssistant")
+                {
+                    UseShellExecute = true
+                };
+                System.Diagnostics.Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Could not open GitHub page: " + ex.Message,
+                    "Clarion Assistant", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
 
