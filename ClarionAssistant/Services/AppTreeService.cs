@@ -795,18 +795,48 @@ namespace ClarionAssistant.Services
 
         /// <summary>
         /// Save changes and close the embeditor.
+        /// Prefers CommonGenEditor.SaveAndExit() which saves silently; falls back to
+        /// IGeneratorDialog.TryClose() if the direct method is unavailable. TryClose
+        /// routes through OnBackClick which shows a "Save changes?" MessageBox when
+        /// IsDirty is true, blocking the MCP call — so SaveAndExit is strongly preferred.
         /// </summary>
         public string SaveAndCloseEmbeditor()
         {
             var editor = GetClaGenEditor();
             if (editor == null) return "Error: No embeditor is currently open.";
 
+            // Preferred path: call SaveAndExit() directly on the editor. It saves
+            // silently (no MessageBox) and then closes the view.
+            var saveAndExit = editor.GetType().GetMethod("SaveAndExit", AllInstance, null, Type.EmptyTypes, null);
+            if (saveAndExit != null)
+            {
+                try
+                {
+                    saveAndExit.Invoke(editor, null);
+                }
+                catch (Exception ex)
+                {
+                    return "Error: SaveAndExit threw: " + (ex.InnerException?.Message ?? ex.Message);
+                }
+
+                // Re-check IsDirty: if Save() failed silently inside SaveAndExit the
+                // flag stays true and the editor may have been closed with unpersisted
+                // changes. Surface that to the caller instead of claiming success.
+                bool? stillDirty = GetIsDirty(editor);
+                if (stillDirty == true)
+                    return "Error: SaveAndExit completed but the editor is still dirty — save did not persist.";
+
+                return "Embeditor saved and closed.";
+            }
+
+            // Fallback: older Clarion builds that don't expose SaveAndExit. Go through
+            // the IGeneratorDialog.TryClose path, which may still show a modal prompt
+            // when dirty. Kept for compatibility but should rarely fire in practice.
             try
             {
-                // Check for the IGeneratorDialog interface which provides TryClose/HaveChanges
                 var dialogInterface = editor.GetType().GetInterface("SoftVelocity.Generator.IGeneratorDialog");
                 if (dialogInterface == null)
-                    return "Error: ClaGenEditor does not implement IGeneratorDialog.";
+                    return "Error: ClaGenEditor does not implement IGeneratorDialog and has no SaveAndExit method.";
 
                 var tryCloseMethod = dialogInterface.GetMethod("TryClose");
                 if (tryCloseMethod == null)
@@ -814,13 +844,29 @@ namespace ClarionAssistant.Services
 
                 bool closed = (bool)tryCloseMethod.Invoke(editor, null);
                 return closed
-                    ? "Embeditor saved and closed."
+                    ? "Embeditor saved and closed (via TryClose fallback)."
                     : "Embeditor TryClose returned false — may have validation errors or was cancelled.";
             }
             catch (Exception ex)
             {
                 return "Error: " + (ex.InnerException?.Message ?? ex.Message);
             }
+        }
+
+        private bool? GetIsDirty(object editor)
+        {
+            var t = editor.GetType();
+            while (t != null)
+            {
+                var prop = t.GetProperty("IsDirty", AllInstance);
+                if (prop != null && prop.CanRead)
+                {
+                    try { return (bool)prop.GetValue(editor, null); }
+                    catch { return null; }
+                }
+                t = t.BaseType;
+            }
+            return null;
         }
 
         /// <summary>
