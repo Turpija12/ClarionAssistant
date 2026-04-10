@@ -910,12 +910,16 @@ Use this tool to discover IDE APIs and understand what's available for automatio
                     "from get_embeditor_source or search_embeditor_source «E:N» tokens. " +
                     "Pass the complete replacement code — existing content is overwritten. " +
                     "Indentation is applied automatically from the embed point's column position. " +
+                    "Always end the code with a trailing newline: Ctrl-X in the PWEE editor will not delete " +
+                    "the bottom-most line of an embed, so a trailing newline keeps every real code line " +
+                    "user-deletable. When rewriting multiple embeds in one pass, write the HIGHEST line " +
+                    "number first and work downward so earlier «E:N» tokens stay valid. " +
                     "Response reports the line delta: if non-zero, all «E:N» tokens after this line are stale — " +
                     "call search_embeditor_source or get_embeditor_source again before writing to later embeds.",
                 InputSchema = McpJsonRpc.BuildSchema(new Dictionary<string, string>
                 {
                     { "line_number", "1-based line number from «E:N» tokens in get_embeditor_source or search_embeditor_source output" },
-                    { "code",        "Complete replacement Clarion code for the embed (overwrites existing content; indentation applied automatically)" }
+                    { "code",        "Complete replacement Clarion code for the embed. Include a trailing newline so Ctrl-X can delete every code line. Indentation is applied automatically." }
                 }, new[] { "line_number", "code" }),
                 RequiresUiThread = true,
                 Handler = args =>
