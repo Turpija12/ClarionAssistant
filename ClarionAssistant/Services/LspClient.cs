@@ -28,6 +28,14 @@ namespace ClarionAssistant.Services
         private volatile bool _running;
         private Dictionary<string, object> _pendingUpdatePaths;
 
+        // Diagnostics cache — populated by textDocument/publishDiagnostics notifications.
+        // Keyed by canonical file URI (always built via FilePathToUri to avoid encoding drift).
+        // LRU-bounded at 50 entries; oldest-by-LastUpdateTicks is evicted on insert.
+        private const int MaxCachedDiagnosticFiles = 50;
+        private readonly Dictionary<string, DiagnosticSet> _diagnostics =
+            new Dictionary<string, DiagnosticSet>(StringComparer.OrdinalIgnoreCase);
+        private readonly object _diagnosticsLock = new object();
+
         public bool IsRunning { get { return _running && _process != null && !_process.HasExited; } }
 
         /// <summary>
@@ -51,16 +59,11 @@ namespace ClarionAssistant.Services
 
             try
             {
-                // Use bundled node.exe next to server.js, fall back to system PATH
-                string lspDir = Path.GetDirectoryName(serverJsPath);
-                string lspRoot = Path.GetFullPath(Path.Combine(lspDir, "..", "..", ".."));
-                string nodeExe = Path.Combine(lspRoot, "node.exe");
-                System.Diagnostics.Debug.WriteLine("[LSP] Looking for node.exe at: " + nodeExe);
-                if (!File.Exists(nodeExe))
-                {
-                    System.Diagnostics.Debug.WriteLine("[LSP] Bundled node.exe not found, falling back to PATH");
-                    nodeExe = "node";
-                }
+                // Resolve node.exe in order:
+                // 1. Bundled next to our LSP distribution (when shipped in installer)
+                // 2. VS Code's bundled node from the Stable install
+                // 3. System PATH
+                string nodeExe = ResolveNodeExe(serverJsPath);
 
                 System.Diagnostics.Debug.WriteLine("[LSP] Starting: " + nodeExe + " \"" + serverJsPath + "\" --stdio");
 
@@ -153,10 +156,66 @@ namespace ClarionAssistant.Services
             }
         }
 
+        /// <summary>
+        /// Resolves node.exe for spawning the LSP server. VS Code cannot be used as a
+        /// fallback because it embeds node inside Electron (Code.exe) rather than
+        /// shipping a standalone binary. The Clarion VS Code extension also does not
+        /// bundle its own node. So if a user has only VS Code + the extension, they
+        /// still need a real Node.js install somewhere.
+        ///
+        /// Tries in order:
+        /// (1) node.exe bundled next to the LSP distribution (installer-shipped layout),
+        /// (2) Node.js official installer default at C:\Program Files\nodejs\node.exe,
+        /// (3) Node.js 32-bit installer default at C:\Program Files (x86)\nodejs\node.exe,
+        /// (4) Claude Code standalone bundled node at %USERPROFILE%\.claude\local\node.exe,
+        /// (5) "node" on the system PATH (last resort — Process.Start will fail with a
+        ///     clear error if no node is installed at all).
+        /// </summary>
+        private static string ResolveNodeExe(string serverJsPath)
+        {
+            try
+            {
+                string lspDir = Path.GetDirectoryName(serverJsPath);
+                string lspRoot = Path.GetFullPath(Path.Combine(lspDir, "..", "..", ".."));
+                string bundled = Path.Combine(lspRoot, "node.exe");
+                System.Diagnostics.Debug.WriteLine("[LSP] Looking for bundled node.exe at: " + bundled);
+                if (File.Exists(bundled)) return bundled;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("[LSP] Bundled node.exe lookup failed: " + ex.Message);
+            }
+
+            try
+            {
+                string[] candidates = new[]
+                {
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node.exe"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "nodejs", "node.exe"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "local", "node.exe"),
+                };
+
+                foreach (string candidate in candidates)
+                {
+                    if (File.Exists(candidate))
+                    {
+                        System.Diagnostics.Debug.WriteLine("[LSP] Using node.exe at: " + candidate);
+                        return candidate;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("[LSP] node.exe fallback search failed: " + ex.Message);
+            }
+
+            System.Diagnostics.Debug.WriteLine("[LSP] No bundled node.exe found, falling back to PATH");
+            return "node";
+        }
+
         public void Stop()
         {
             _running = false;
-
 
             try
             {
@@ -169,9 +228,22 @@ namespace ClarionAssistant.Services
                     if (!_process.HasExited) _process.Kill();
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("[LSP] Stop failed: " + ex.Message);
+            }
 
             _process = null;
+
+            // Release diagnostic events.
+            lock (_diagnosticsLock)
+            {
+                foreach (var set in _diagnostics.Values)
+                {
+                    try { set.Ready.Dispose(); } catch { }
+                }
+                _diagnostics.Clear();
+            }
         }
 
         #region LSP Requests
@@ -224,21 +296,169 @@ namespace ClarionAssistant.Services
             return SendRequest("workspace/symbol", parms);
         }
 
+        /// <summary>
+        /// textDocument/rename - asks the server for a workspace edit that would
+        /// rename the symbol at the given position. Returns the raw LSP WorkspaceEdit
+        /// result — the caller is responsible for applying the edits (and MUST seek
+        /// developer approval first per CLAUDE.md rule #9).
+        /// </summary>
+        public Dictionary<string, object> Rename(string filePath, int line, int character, string newName)
+        {
+            EnsureDocumentOpen(filePath);
+            var parms = BuildTextDocumentPosition(filePath, line, character);
+            parms["newName"] = newName;
+            return SendRequest("textDocument/rename", parms, 8000);
+        }
+
+        #endregion
+
+        #region Diagnostics
+
+        /// <summary>
+        /// Triggers fresh analysis of the given file and waits for the server to
+        /// publish diagnostics. If the file isn't open yet, sends didOpen; if it is,
+        /// sends didChange with the current disk contents so stale cached diagnostics
+        /// from a previous version don't satisfy the wait.
+        ///
+        /// Returns a DiagnosticWaitResult where Pending=false means the server
+        /// authoritatively reported results (possibly an empty list = clean file),
+        /// and Pending=true means the server didn't respond within timeoutMs.
+        /// </summary>
+        public DiagnosticWaitResult GetDiagnostics(string filePath, int timeoutMs = 3000)
+        {
+            var result = new DiagnosticWaitResult { Entries = new List<DiagnosticEntry>(), Pending = true };
+            if (!IsRunning || string.IsNullOrEmpty(filePath)) return result;
+
+            // Trigger server analysis before waiting. We always force a new publish
+            // so Claude sees the state of the file as of this call — stale cached
+            // diagnostics from before the last edit are not good enough.
+            try
+            {
+                if (_openDocuments.ContainsKey(filePath))
+                    SendDidChangeFromDisk(filePath);
+                else
+                    EnsureDocumentOpen(filePath);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("[LSP] GetDiagnostics trigger failed: " + ex.Message);
+                return result;
+            }
+
+            return WaitForDiagnostics(filePath, timeoutMs, forceRefresh: true);
+        }
+
+        /// <summary>
+        /// Returns the current diagnostics cached for the given file. Does NOT
+        /// wait or trigger re-analysis — intended for UI polling (Phase 3a) where
+        /// we just want a fast read of whatever the server has told us so far.
+        /// Returns null if no publishDiagnostics has arrived yet for this file.
+        /// </summary>
+        public List<DiagnosticEntry> GetCachedDiagnostics(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath)) return null;
+            string key = FilePathToUri(filePath);
+
+            lock (_diagnosticsLock)
+            {
+                DiagnosticSet set;
+                if (!_diagnostics.TryGetValue(key, out set)) return null;
+                if (!set.WasPublished) return null;
+                // Return a snapshot to avoid cross-thread mutation of the caller's list.
+                return new List<DiagnosticEntry>(set.Entries);
+            }
+        }
+
+        /// <summary>
+        /// Waits up to timeoutMs for a publishDiagnostics notification to arrive
+        /// for the given file. If `forceRefresh` is true, the wait ignores any
+        /// previously-cached publish and only returns when a NEW publish arrives
+        /// after the call begins (use this when you know the file content has
+        /// changed and want a fresh analysis).
+        ///
+        /// Returns a result with `Pending=false` on signal and `Pending=true` on
+        /// timeout. Entries may be empty on a signal result — that means the
+        /// server authoritatively reported zero diagnostics (a clean file).
+        ///
+        /// The caller is responsible for triggering analysis beforehand (didOpen
+        /// or didChange) — this method only waits on the publish event.
+        /// </summary>
+        public DiagnosticWaitResult WaitForDiagnostics(string filePath, int timeoutMs, bool forceRefresh)
+        {
+            var result = new DiagnosticWaitResult { Entries = new List<DiagnosticEntry>(), Pending = true };
+            if (string.IsNullOrEmpty(filePath)) return result;
+
+            string key = FilePathToUri(filePath);
+
+            DiagnosticSet set;
+            lock (_diagnosticsLock)
+            {
+                if (!_diagnostics.TryGetValue(key, out set))
+                {
+                    set = new DiagnosticSet();
+                    _diagnostics[key] = set;
+                    EvictOldestIfFull_NoLock();
+                }
+
+                if (forceRefresh)
+                {
+                    // Clear the event so we wait strictly for a publish that happens
+                    // AFTER this call — cached diagnostics from before the content
+                    // changed must not satisfy the wait.
+                    try { set.Ready.Reset(); } catch { }
+                }
+                else if (set.WasPublished)
+                {
+                    // Non-force path with an already-cached publish — return immediately.
+                    result.Entries = new List<DiagnosticEntry>(set.Entries);
+                    result.Pending = false;
+                    return result;
+                }
+            }
+
+            // Wait outside the lock so publish handlers aren't blocked.
+            bool signaled;
+            try
+            {
+                signaled = set.Ready.Wait(timeoutMs);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Set was evicted between registration and wait — report as pending so the caller can retry.
+                return result;
+            }
+
+            if (signaled)
+            {
+                lock (_diagnosticsLock)
+                {
+                    if (_diagnostics.TryGetValue(key, out set) && set.WasPublished)
+                    {
+                        result.Entries = new List<DiagnosticEntry>(set.Entries);
+                        result.Pending = false;
+                    }
+                }
+            }
+
+            return result;
+        }
+
         #endregion
 
         #region Document Management
 
-        private readonly HashSet<string> _openDocuments = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Tracks open documents and their current textDocument version number (LSP protocol
+        // requires version to increase monotonically across didOpen → didChange for a URI).
+        private readonly Dictionary<string, int> _openDocuments = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         private void EnsureDocumentOpen(string filePath)
         {
-            if (_openDocuments.Contains(filePath)) return;
+            if (_openDocuments.ContainsKey(filePath)) return;
             if (!File.Exists(filePath)) return;
 
             string uri = FilePathToUri(filePath);
             string content = File.ReadAllText(filePath);
 
-            // Determine language ID
             string ext = Path.GetExtension(filePath).ToLower();
             string languageId = ext == ".inc" || ext == ".clw" || ext == ".equ" ? "clarion" : "plaintext";
 
@@ -255,7 +475,49 @@ namespace ClarionAssistant.Services
             };
 
             SendNotification("textDocument/didOpen", parms);
-            _openDocuments.Add(filePath);
+            _openDocuments[filePath] = 1;
+        }
+
+        /// <summary>
+        /// Send a full-document textDocument/didChange with the current file contents
+        /// from disk. Used to force the server to re-analyze a file that's already open
+        /// after it may have changed (e.g., after write_embed_content or an external edit).
+        /// If the file hasn't been opened yet, falls through to EnsureDocumentOpen instead.
+        /// </summary>
+        private void SendDidChangeFromDisk(string filePath)
+        {
+            if (!File.Exists(filePath)) return;
+
+            int currentVersion;
+            if (!_openDocuments.TryGetValue(filePath, out currentVersion))
+            {
+                EnsureDocumentOpen(filePath);
+                return;
+            }
+
+            string uri = FilePathToUri(filePath);
+            string content = File.ReadAllText(filePath);
+            int nextVersion = currentVersion + 1;
+
+            // LSP TextDocumentContentChangeEvent without `range` = full document replacement.
+            var changes = new System.Collections.ArrayList
+            {
+                new Dictionary<string, object> { { "text", content } }
+            };
+
+            var parms = new Dictionary<string, object>
+            {
+                { "textDocument", new Dictionary<string, object>
+                    {
+                        { "uri", uri },
+                        { "version", nextVersion }
+                    }
+                },
+                { "contentChanges", changes }
+            };
+
+            SendNotification("textDocument/didChange", parms);
+            _openDocuments[filePath] = nextVersion;
         }
 
         #endregion
@@ -341,7 +603,10 @@ namespace ClarionAssistant.Services
                     _process.StandardInput.BaseStream.Write(content, 0, content.Length);
                     _process.StandardInput.BaseStream.Flush();
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine("[LSP] WriteMessage failed: " + ex.Message);
+                }
             }
         }
 
@@ -358,6 +623,8 @@ namespace ClarionAssistant.Services
                     try
                     {
                         var msg = _serializer.Deserialize<Dictionary<string, object>>(json);
+
+                        // Response: has `id` → correlate with a pending request
                         if (msg.ContainsKey("id") && msg["id"] != null)
                         {
                             int id;
@@ -368,13 +635,141 @@ namespace ClarionAssistant.Services
                                     _responses[id] = json;
                                 }
                                 _responseReceived.Set();
+                                continue;
                             }
                         }
+
+                        // Notification: has `method` but no `id` → dispatch by method name
+                        if (msg.ContainsKey("method") && msg["method"] != null)
+                        {
+                            HandleNotification(msg);
+                        }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine("[LSP] ReadLoop message parse failed: " + ex.Message);
+                    }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("[LSP] ReadLoop terminated: " + ex.Message);
+            }
+        }
+
+        private void HandleNotification(Dictionary<string, object> msg)
+        {
+            string method = msg["method"] as string;
+            if (string.IsNullOrEmpty(method)) return;
+
+            switch (method)
+            {
+                case "textDocument/publishDiagnostics":
+                    HandlePublishDiagnostics(msg["params"] as Dictionary<string, object>);
+                    break;
+                default:
+                    System.Diagnostics.Debug.WriteLine("[LSP] Ignored notification: " + method);
+                    break;
+            }
+        }
+
+        private void HandlePublishDiagnostics(Dictionary<string, object> parms)
+        {
+            if (parms == null) return;
+
+            string uri = parms.ContainsKey("uri") ? parms["uri"] as string : null;
+            if (string.IsNullOrEmpty(uri)) return;
+
+            // Canonicalize via round-trip through FilePathToUri so cache keys are consistent
+            // regardless of whether the URI came in with different casing/encoding than what
+            // we sent on didOpen.
+            string canonical = CanonicalizeUri(uri);
+
+            var entries = new List<DiagnosticEntry>();
+            var diagList = parms.ContainsKey("diagnostics") ? parms["diagnostics"] as System.Collections.ArrayList : null;
+            if (diagList != null)
+            {
+                foreach (var obj in diagList)
+                {
+                    var d = obj as Dictionary<string, object>;
+                    if (d == null) continue;
+
+                    var entry = new DiagnosticEntry();
+                    if (d.ContainsKey("severity")) entry.Severity = Convert.ToInt32(d["severity"]);
+                    if (d.ContainsKey("message")) entry.Message = d["message"] as string;
+                    if (d.ContainsKey("source")) entry.Source = d["source"] as string;
+
+                    var range = d.ContainsKey("range") ? d["range"] as Dictionary<string, object> : null;
+                    var start = range != null && range.ContainsKey("start") ? range["start"] as Dictionary<string, object> : null;
+                    if (start != null)
+                    {
+                        if (start.ContainsKey("line")) entry.Line = Convert.ToInt32(start["line"]);
+                        if (start.ContainsKey("character")) entry.Character = Convert.ToInt32(start["character"]);
+                    }
+
+                    entries.Add(entry);
+                }
+            }
+
+            lock (_diagnosticsLock)
+            {
+                DiagnosticSet set;
+                if (!_diagnostics.TryGetValue(canonical, out set))
+                {
+                    set = new DiagnosticSet();
+                    _diagnostics[canonical] = set;
+                    EvictOldestIfFull_NoLock();
+                }
+
+                set.Entries = entries;
+                set.WasPublished = true;
+                set.LastUpdateTicks = DateTime.UtcNow.Ticks;
+                // Signal any waiter that new diagnostics have arrived.
+                set.Ready.Set();
+            }
+
+            System.Diagnostics.Debug.WriteLine(string.Format(
+                "[LSP] publishDiagnostics: {0} entries for {1}", entries.Count, canonical));
+        }
+
+        private void EvictOldestIfFull_NoLock()
+        {
+            if (_diagnostics.Count <= MaxCachedDiagnosticFiles) return;
+
+            string oldestKey = null;
+            long oldestTicks = long.MaxValue;
+            foreach (var kv in _diagnostics)
+            {
+                if (kv.Value.LastUpdateTicks < oldestTicks)
+                {
+                    oldestTicks = kv.Value.LastUpdateTicks;
+                    oldestKey = kv.Key;
+                }
+            }
+
+            if (oldestKey != null)
+            {
+                var victim = _diagnostics[oldestKey];
+                _diagnostics.Remove(oldestKey);
+                try { victim.Ready.Dispose(); } catch { }
+                System.Diagnostics.Debug.WriteLine("[LSP] Evicted oldest diagnostics cache entry: " + oldestKey);
+            }
+        }
+
+        private static string CanonicalizeUri(string uri)
+        {
+            if (string.IsNullOrEmpty(uri)) return uri;
+            // Strip file:// prefix, normalize to a real path, re-apply FilePathToUri so the
+            // cached key matches what our own EnsureDocumentOpen would produce.
+            try
+            {
+                string path = UriToFilePath(uri);
+                return FilePathToUri(path);
+            }
+            catch
+            {
+                return uri;
+            }
         }
 
         private string ReadMessage(Stream stream)
@@ -442,5 +837,48 @@ namespace ClarionAssistant.Services
         {
             Stop();
         }
+
+        #region Diagnostic data types
+
+        /// <summary>
+        /// A single diagnostic entry from a textDocument/publishDiagnostics notification.
+        /// Severity follows the LSP spec: 1=Error, 2=Warning, 3=Information, 4=Hint.
+        /// </summary>
+        public class DiagnosticEntry
+        {
+            public int Severity;
+            public int Line;
+            public int Character;
+            public string Message;
+            public string Source;
+        }
+
+        /// <summary>
+        /// Per-URI diagnostics cache entry. Ready is set by HandlePublishDiagnostics
+        /// whenever a new publish arrives, allowing WaitForDiagnostics callers to block
+        /// on an event-driven signal instead of polling.
+        /// </summary>
+        private class DiagnosticSet
+        {
+            public List<DiagnosticEntry> Entries = new List<DiagnosticEntry>();
+            public ManualResetEventSlim Ready = new ManualResetEventSlim(false);
+            public long LastUpdateTicks = DateTime.UtcNow.Ticks;
+            // True once a publishDiagnostics has ever arrived for this URI — distinguishes
+            // an authoritative "clean file" (Entries=[]) from "we haven't heard anything yet".
+            public bool WasPublished;
+        }
+
+        /// <summary>
+        /// Result returned by WaitForDiagnostics. Pending=true means the wait timed out;
+        /// the server may still be analysing and callers should report that to the user
+        /// rather than treating empty Entries as "file is clean".
+        /// </summary>
+        public class DiagnosticWaitResult
+        {
+            public List<DiagnosticEntry> Entries;
+            public bool Pending;
+        }
+
+        #endregion
     }
 }

@@ -97,13 +97,21 @@ IMPORTANT: If `query_docs` returns "DocGraph database not found", tell the devel
 - `lsp_hover` - Get type info, signature, and documentation for a symbol.
 - `lsp_document_symbols` - Get all symbols in a file (procedures, classes, variables).
 - `lsp_find_symbol` - Search for symbols across the workspace by name.
+- `lsp_diagnostics` - Get current errors and warnings for a file. Your feedback loop for verifying edits.
+- `lsp_rename` - Propose a rename. Returns edits but does NOT apply them — present for developer approval first.
 
 The LSP provides real-time analysis of the actual source code. Use it for:
 - "Where is X defined?" - lsp_definition
 - "Who uses X?" - lsp_references
-- "What type is X?" - lsp_hover
+- "What type is X?" - lsp_hover (prefer over query_codegraph for unsaved/modified files — LSP sees live state, CodeGraph is index-based and can be stale)
 - "What's in this file?" - lsp_document_symbols
 - "Find symbol named X" - lsp_find_symbol
+- "Are there errors in this file?" / "Did my edit compile?" - lsp_diagnostics
+- "Rename this procedure to Y" - lsp_rename, then present edits for approval, then apply
+
+**Self-correcting edits**: after writing code into an embeditor, call `lsp_diagnostics` to verify the edit is syntactically valid. If new errors appear, fix them before calling `save_and_close_embeditor`. `lsp_diagnostics` returns `{pending, count, diagnostics}` — if `pending: true`, treat as "still analyzing", not "no errors".
+
+**Rename approval**: `lsp_rename` returns the edit list but does NOT apply it. Per rule #9, you must show the list to the developer in chat, wait for explicit approval, then apply using `write_embed_content` / `replace_range` / `write_file`. If rename returns `{error: ...}`, the symbol can't be renamed — explain to the user.
 
 After getting a result with file path and line, use `open_file` to navigate the developer there.
 

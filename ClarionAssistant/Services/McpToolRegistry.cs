@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using System.Web.Script.Serialization;
 
 namespace ClarionAssistant.Services
 {
@@ -1739,9 +1740,17 @@ COMMON QUERIES:
                     if (string.IsNullOrEmpty(wsPath) || !Directory.Exists(wsPath))
                         return "Error: workspace_path required (directory containing .sln)";
 
-                    string serverJs = ResolveLspServerPath();
+                    string resolveSource;
+                    string serverJs = ResolveLspServerPath(out resolveSource);
                     if (serverJs == null)
-                        return "Error: LSP server not found. Place server.js in the lsp-server subfolder next to the addin DLL, or set the 'Lsp.ServerPath' setting to the full path.";
+                    {
+                        // resolveSource may contain a descriptive error from the VS Code scan
+                        // (e.g., "extension found but layout was X").
+                        string extra = !string.IsNullOrEmpty(resolveSource) ? "\n  " + resolveSource : "";
+                        return "Error: LSP server not found. Install the Clarion extension for VS Code, "
+                            + "place server.js in the lsp-server subfolder next to the addin DLL, or set "
+                            + "the 'Lsp.ServerPath' setting to the full path." + extra;
+                    }
 
                     if (_lspClient != null) _lspClient.Dispose();
                     _lspClient = new LspClient();
@@ -1751,12 +1760,13 @@ COMMON QUERIES:
 
                     bool ok = _lspClient.Start(serverJs, wsUri, wsName);
                     if (ok)
-                        return "LSP server started for workspace: " + wsPath;
+                        return "LSP server started for workspace: " + wsPath + "\n  Source: " + resolveSource + "\n  Server: " + serverJs;
 
                     // Provide diagnostic info on failure
                     string lspRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(serverJs), "..", "..", ".."));
                     string nodeExe = Path.Combine(lspRoot, "node.exe");
                     string diag = "Error: LSP server failed to start.\n"
+                        + "  source: " + resolveSource + "\n"
                         + "  server.js: " + serverJs + " (exists: " + File.Exists(serverJs) + ")\n"
                         + "  node.exe: " + nodeExe + " (exists: " + File.Exists(nodeExe) + ")\n"
                         + "  workspace: " + wsUri + "\n"
@@ -1892,6 +1902,153 @@ COMMON QUERIES:
                     string query = McpJsonRpc.GetString(args, "query");
                     var result = _lspClient.FindWorkspaceSymbol(query);
                     return FormatLspResult(result);
+                }
+            });
+
+            Register(new McpTool
+            {
+                Name = "lsp_diagnostics",
+                Description = "Get current errors and warnings for a Clarion source file from the language server. " +
+                    "Call this after writing code to verify the edit is syntactically valid — it's Claude's feedback loop " +
+                    "for self-correcting typos, missing imports, and other errors before save. Triggers a fresh analysis " +
+                    "(didChange if the file was already open) so results reflect the current on-disk content.\n" +
+                    "Returns: { pending: false, count: N, diagnostics: [{severity, line, character, message, source}] } on success " +
+                    "(N may be 0 for a clean file). Returns { pending: true } if the server didn't respond within the timeout — " +
+                    "treat that as 'still analyzing', NOT as 'no errors'. Severity: 1=error, 2=warning, 3=info, 4=hint.",
+                InputSchema = McpJsonRpc.BuildSchema(
+                    new Dictionary<string, string>
+                    {
+                        { "file_path", "Absolute path to the .clw or .inc file to check" }
+                    },
+                    new[] { "file_path" }),
+                RequiresUiThread = false,
+                Handler = args =>
+                {
+                    EnsureLspRunning();
+                    if (_lspClient == null || !_lspClient.IsRunning)
+                        return "Error: LSP not running. Start it with lsp_start or check Lsp.ServerPath.";
+
+                    string filePath = McpJsonRpc.GetString(args, "file_path");
+                    if (string.IsNullOrEmpty(filePath))
+                        return "Error: file_path is required.";
+                    if (!File.Exists(filePath))
+                        return "Error: File not found: " + filePath;
+
+                    var result = _lspClient.GetDiagnostics(filePath, 3000);
+
+                    var response = new Dictionary<string, object>
+                    {
+                        { "pending", result.Pending },
+                        { "count", result.Entries.Count }
+                    };
+
+                    if (result.Pending)
+                    {
+                        response["note"] = "Server did not publish diagnostics within 3 seconds. "
+                            + "The file may still be analyzing — retry shortly. Empty 'diagnostics' "
+                            + "here does NOT mean the file is clean.";
+                    }
+
+                    var diagList = new List<Dictionary<string, object>>();
+                    foreach (var e in result.Entries)
+                    {
+                        string sevLabel = e.Severity == 1 ? "error"
+                                        : e.Severity == 2 ? "warning"
+                                        : e.Severity == 3 ? "information"
+                                        : e.Severity == 4 ? "hint"
+                                        : "unknown";
+                        diagList.Add(new Dictionary<string, object>
+                        {
+                            { "severity", e.Severity },
+                            { "severityLabel", sevLabel },
+                            { "line", e.Line },
+                            { "character", e.Character },
+                            { "message", e.Message ?? "" },
+                            { "source", e.Source ?? "" }
+                        });
+                    }
+                    response["diagnostics"] = diagList;
+
+                    return new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.Serialize(response);
+                }
+            });
+
+            Register(new McpTool
+            {
+                Name = "lsp_rename",
+                Description = "Propose a rename of the symbol at the given file/line/character position. " +
+                    "IMPORTANT: This tool returns a list of edits that WOULD be applied — it does NOT apply them. " +
+                    "You MUST present the edit list to the developer for approval (per CLAUDE.md rule #9) before " +
+                    "applying any of the edits via write_embed_content, replace_range, or write_file.\n" +
+                    "Returns: { edits: [{file, line, character, endLine, endCharacter, newText}, ...], count: N }. " +
+                    "If the server doesn't support rename for this symbol (keyword, built-in, or unsupported scope) " +
+                    "returns { error: 'description' } — do not retry blindly, explain to the user what failed.",
+                InputSchema = McpJsonRpc.BuildSchema(
+                    new Dictionary<string, string>
+                    {
+                        { "file_path", "Absolute path to the file containing the symbol" },
+                        { "line", "Zero-based line number of the symbol occurrence" },
+                        { "character", "Zero-based character offset within the line" },
+                        { "new_name", "New name for the symbol" }
+                    },
+                    new[] { "file_path", "line", "character", "new_name" }),
+                RequiresUiThread = false,
+                Handler = args =>
+                {
+                    EnsureLspRunning();
+                    if (_lspClient == null || !_lspClient.IsRunning)
+                        return "Error: LSP not running. Start it with lsp_start or check Lsp.ServerPath.";
+
+                    string filePath = McpJsonRpc.GetString(args, "file_path");
+                    int line = McpJsonRpc.GetInt(args, "line", -1);
+                    int character = McpJsonRpc.GetInt(args, "character", -1);
+                    string newName = McpJsonRpc.GetString(args, "new_name");
+
+                    if (string.IsNullOrEmpty(filePath) || line < 0 || character < 0 || string.IsNullOrEmpty(newName))
+                        return "Error: file_path, line, character, and new_name are all required.";
+                    if (!File.Exists(filePath))
+                        return "Error: File not found: " + filePath;
+
+                    Dictionary<string, object> rawResult;
+                    try
+                    {
+                        rawResult = _lspClient.Rename(filePath, line, character, newName);
+                    }
+                    catch (Exception ex)
+                    {
+                        return "Error: rename request failed: " + ex.Message;
+                    }
+
+                    if (rawResult == null)
+                        return new JavaScriptSerializer().Serialize(new Dictionary<string, object>
+                        {
+                            { "error", "Server did not respond to rename request within timeout." }
+                        });
+
+                    // The LSP response is {jsonrpc, id, result: WorkspaceEdit | null}.
+                    object resultObj;
+                    if (!rawResult.TryGetValue("result", out resultObj) || resultObj == null)
+                        return new JavaScriptSerializer().Serialize(new Dictionary<string, object>
+                        {
+                            { "error", "Rename not supported for this symbol. It may be a language keyword, a built-in, or a position the server can't rename (e.g., whitespace)." }
+                        });
+
+                    // WorkspaceEdit has either `changes` (map<uri, TextEdit[]>) or `documentChanges` (array of TextDocumentEdit).
+                    var edits = ExtractWorkspaceEditFlat(resultObj);
+                    if (edits.Count == 0)
+                        return new JavaScriptSerializer().Serialize(new Dictionary<string, object>
+                        {
+                            { "error", "Rename returned an empty edit set. The symbol may have no references in the workspace." }
+                        });
+
+                    var response = new Dictionary<string, object>
+                    {
+                        { "count", edits.Count },
+                        { "edits", edits },
+                        { "note", "These edits are proposed, NOT applied. Present them to the developer for approval before writing." }
+                    };
+
+                    return new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.Serialize(response);
                 }
             });
 
@@ -3290,27 +3447,322 @@ EXAMPLES:
         #region LSP Helpers
 
         /// <summary>
-        /// Resolves the LSP server.js path. Priority:
-        /// 1. Settings key "Lsp.ServerPath" (user-configured)
-        /// 2. Relative to assembly: {assemblyDir}\lsp-server\server.js
-        /// Returns null if not found.
+        /// Flattens an LSP WorkspaceEdit (from textDocument/rename response) into a
+        /// simple list of per-file edits that Claude can present to the developer.
+        /// Handles both the `changes` form (map of uri → TextEdit[]) and the
+        /// `documentChanges` form (array of TextDocumentEdit).
         /// </summary>
-        private string ResolveLspServerPath()
+        private List<Dictionary<string, object>> ExtractWorkspaceEditFlat(object workspaceEdit)
         {
-            // 1. Check user settings
+            var result = new List<Dictionary<string, object>>();
+            var we = workspaceEdit as Dictionary<string, object>;
+            if (we == null) return result;
+
+            // Form 1: changes = { "file:///...": [TextEdit, ...], ... }
+            if (we.TryGetValue("changes", out object changesObj))
+            {
+                var changes = changesObj as Dictionary<string, object>;
+                if (changes != null)
+                {
+                    foreach (var kv in changes)
+                    {
+                        string uri = kv.Key;
+                        string filePath = LspClient.UriToFilePath(uri);
+                        var editArray = kv.Value as System.Collections.ArrayList;
+                        if (editArray == null) continue;
+                        foreach (var editObj in editArray)
+                        {
+                            var flat = FlattenTextEdit(editObj as Dictionary<string, object>, filePath);
+                            if (flat != null) result.Add(flat);
+                        }
+                    }
+                }
+            }
+
+            // Form 2: documentChanges = [ { textDocument: {uri,version}, edits: [TextEdit,...] }, ... ]
+            if (we.TryGetValue("documentChanges", out object docChangesObj))
+            {
+                var docChanges = docChangesObj as System.Collections.ArrayList;
+                if (docChanges != null)
+                {
+                    foreach (var dcObj in docChanges)
+                    {
+                        var dc = dcObj as Dictionary<string, object>;
+                        if (dc == null) continue;
+                        var textDoc = dc.ContainsKey("textDocument") ? dc["textDocument"] as Dictionary<string, object> : null;
+                        string uri = textDoc != null && textDoc.ContainsKey("uri") ? textDoc["uri"] as string : null;
+                        string filePath = uri != null ? LspClient.UriToFilePath(uri) : null;
+                        var editArray = dc.ContainsKey("edits") ? dc["edits"] as System.Collections.ArrayList : null;
+                        if (editArray == null) continue;
+                        foreach (var editObj in editArray)
+                        {
+                            var flat = FlattenTextEdit(editObj as Dictionary<string, object>, filePath);
+                            if (flat != null) result.Add(flat);
+                        }
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private Dictionary<string, object> FlattenTextEdit(Dictionary<string, object> edit, string filePath)
+        {
+            if (edit == null) return null;
+            var range = edit.ContainsKey("range") ? edit["range"] as Dictionary<string, object> : null;
+            var start = range != null && range.ContainsKey("start") ? range["start"] as Dictionary<string, object> : null;
+            var end = range != null && range.ContainsKey("end") ? range["end"] as Dictionary<string, object> : null;
+            if (start == null || end == null) return null;
+
+            return new Dictionary<string, object>
+            {
+                { "file", filePath ?? "" },
+                { "line", start.ContainsKey("line") ? Convert.ToInt32(start["line"]) : 0 },
+                { "character", start.ContainsKey("character") ? Convert.ToInt32(start["character"]) : 0 },
+                { "endLine", end.ContainsKey("line") ? Convert.ToInt32(end["line"]) : 0 },
+                { "endCharacter", end.ContainsKey("character") ? Convert.ToInt32(end["character"]) : 0 },
+                { "newText", edit.ContainsKey("newText") ? edit["newText"] as string ?? "" : "" }
+            };
+        }
+
+        /// <summary>
+        /// Resolves the LSP server.js path. Priority:
+        /// 1. Settings key "Lsp.ServerPath" (manual override — always wins)
+        /// 2. Clarion VS Code extension install, across Stable/Insiders/custom roots,
+        ///    excluding tombstoned extensions listed in .obsolete and picking the
+        ///    highest stable SemVer
+        /// 3. Relative to assembly: {assemblyDir}\lsp-server\out\server\src\server.js
+        /// 4. Returns null ("LSP not available")
+        ///
+        /// The source parameter is populated with a short label describing which
+        /// branch resolved the path ("manual", "vscode-stable", "vscode-insiders",
+        /// "vscode-custom", "bundled") or an error message for lsp_start to surface.
+        /// </summary>
+        private string ResolveLspServerPath(out string source)
+        {
+            source = null;
+
+            // 1. Manual override — never superseded
             if (_chatControl != null)
             {
                 string configured = _chatControl.Settings?.Get("Lsp.ServerPath");
                 if (!string.IsNullOrEmpty(configured) && File.Exists(configured))
+                {
+                    source = "manual (Lsp.ServerPath)";
                     return configured;
+                }
             }
 
-            // 2. Resolve relative to assembly location
+            // 2. VS Code extension scan
+            string vsCodeError = null;
+            string vsCodePath = DiscoverVsCodeLspServer(out source, out vsCodeError);
+            if (vsCodePath != null)
+                return vsCodePath;
+
+            // 3. Assembly-relative fallback
             string assemblyDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
             string lspPath = Path.Combine(assemblyDir, "lsp-server", "out", "server", "src", "server.js");
             if (File.Exists(lspPath))
+            {
+                source = "bundled (lsp-server next to addin)";
                 return lspPath;
+            }
 
+            // 4. Nothing found. Prefer the VS Code error if the scan had one
+            //    (more actionable than "no bundled LSP"), otherwise leave source null.
+            if (vsCodeError != null)
+                source = vsCodeError;
+            return null;
+        }
+
+        /// <summary>
+        /// Scans the Clarion VS Code extension install locations for the Clarion
+        /// Language Server. Returns the path to server.js for the highest stable
+        /// version found, or null if none resolved. When the scan hits a known
+        /// installed extension that's missing the expected layout (e.g., the
+        /// extension was refactored in a newer version), sets layoutError with a
+        /// descriptive message so lsp_start can surface it.
+        /// </summary>
+        private string DiscoverVsCodeLspServer(out string source, out string layoutError)
+        {
+            source = null;
+            layoutError = null;
+
+            // Candidate roots, in order: explicit env override, Stable, Insiders.
+            var candidateRoots = new List<KeyValuePair<string, string>>();
+            string envOverride = Environment.GetEnvironmentVariable("VSCODE_EXTENSIONS");
+            if (!string.IsNullOrEmpty(envOverride))
+                candidateRoots.Add(new KeyValuePair<string, string>(envOverride, "vscode-custom"));
+
+            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            candidateRoots.Add(new KeyValuePair<string, string>(
+                Path.Combine(userProfile, ".vscode", "extensions"), "vscode-stable"));
+            candidateRoots.Add(new KeyValuePair<string, string>(
+                Path.Combine(userProfile, ".vscode-insiders", "extensions"), "vscode-insiders"));
+
+            foreach (var root in candidateRoots)
+            {
+                if (!Directory.Exists(root.Key)) continue;
+
+                string serverJs = FindBestClarionExtensionInRoot(root.Key, out layoutError);
+                if (serverJs != null)
+                {
+                    string version = ExtractVersionFromExtensionPath(serverJs);
+                    source = root.Value + (version != null ? " v" + version : "");
+                    return serverJs;
+                }
+                // Layout error from this root is worth reporting even if other roots are empty.
+                if (layoutError != null)
+                    return null;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Scan a single VS Code extensions root for Clarion LSP. Honors the
+        /// .obsolete tombstone file, picks the highest stable SemVer, and verifies
+        /// the expected server.js layout exists. Sets layoutError when a candidate
+        /// was found but its layout was unrecognised (so the caller can surface a
+        /// descriptive error instead of silently falling through).
+        /// </summary>
+        private string FindBestClarionExtensionInRoot(string extensionsRoot, out string layoutError)
+        {
+            layoutError = null;
+
+            HashSet<string> obsolete = LoadObsoleteSet(extensionsRoot);
+
+            var candidates = new List<KeyValuePair<string, Version>>();
+            string[] stablePrefixed;
+            try
+            {
+                stablePrefixed = Directory.GetDirectories(extensionsRoot, "msarson.clarion-extensions-*");
+            }
+            catch
+            {
+                return null;
+            }
+
+            foreach (string dir in stablePrefixed)
+            {
+                string folderName = Path.GetFileName(dir);
+                if (obsolete.Contains(folderName)) continue;
+
+                Version v = ParseExtensionVersion(folderName);
+                if (v == null) continue;
+                candidates.Add(new KeyValuePair<string, Version>(dir, v));
+            }
+
+            if (candidates.Count == 0) return null;
+
+            // Sort descending by parsed Version — stable > prerelease handled by ParseExtensionVersion.
+            candidates.Sort((a, b) => b.Value.CompareTo(a.Value));
+
+            foreach (var candidate in candidates)
+            {
+                string serverJs = Path.Combine(candidate.Key, "out", "server", "src", "server.js");
+                if (File.Exists(serverJs)) return serverJs;
+            }
+
+            // We found extension folders but none had the expected server.js layout.
+            // Report loudly so the user knows to file a bug or set Lsp.ServerPath manually.
+            string highest = Path.GetFileName(candidates[0].Key);
+            layoutError = "Clarion VS Code extension found (" + highest + ") but '"
+                + Path.Combine("out", "server", "src", "server.js")
+                + "' was not present. The extension layout may have changed in a newer version. "
+                + "Set the 'Lsp.ServerPath' setting to the actual server.js location as a workaround.";
+            return null;
+        }
+
+        /// <summary>
+        /// Reads the .obsolete JSON file in a VS Code extensions directory (if any)
+        /// and returns the set of tombstoned extension folder names. VS Code writes
+        /// this file as a map of {"folder-name": true} entries for extensions it has
+        /// marked obsolete but not yet deleted; we must exclude these from discovery.
+        /// </summary>
+        private HashSet<string> LoadObsoleteSet(string extensionsRoot)
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                string obsoletePath = Path.Combine(extensionsRoot, ".obsolete");
+                if (!File.Exists(obsoletePath)) return set;
+
+                string json = File.ReadAllText(obsoletePath);
+                var serializer = new JavaScriptSerializer();
+                var map = serializer.Deserialize<Dictionary<string, object>>(json);
+                if (map != null)
+                {
+                    foreach (var key in map.Keys)
+                        set.Add(key);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[LSP] Failed to read .obsolete at " + extensionsRoot + ": " + ex.Message);
+            }
+            return set;
+        }
+
+        /// <summary>
+        /// Parses the version suffix of a folder like "msarson.clarion-extensions-0.8.7"
+        /// or "msarson.clarion-extensions-0.10.0-beta.1" into a System.Version. Pre-release
+        /// suffixes are downranked by subtracting 1 from the build component so stable
+        /// releases always sort higher than their corresponding pre-releases.
+        /// Returns null if the folder name isn't parseable.
+        /// </summary>
+        private Version ParseExtensionVersion(string folderName)
+        {
+            const string prefix = "msarson.clarion-extensions-";
+            if (!folderName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return null;
+
+            string versionPart = folderName.Substring(prefix.Length);
+            bool isPrerelease = false;
+            int dashIdx = versionPart.IndexOf('-');
+            if (dashIdx >= 0)
+            {
+                isPrerelease = true;
+                versionPart = versionPart.Substring(0, dashIdx);
+            }
+
+            // Ensure 3 components — System.Version needs major.minor[.build[.revision]].
+            string[] parts = versionPart.Split('.');
+            if (parts.Length < 2 || parts.Length > 4) return null;
+
+            try
+            {
+                int major = int.Parse(parts[0]);
+                int minor = int.Parse(parts[1]);
+                int build = parts.Length > 2 ? int.Parse(parts[2]) : 0;
+                int revision = parts.Length > 3 ? int.Parse(parts[3]) : (isPrerelease ? 0 : 1);
+                // Pre-releases get revision=0, stables get revision=1 so stable > pre at equal build.
+                if (!isPrerelease && parts.Length <= 3) revision = 1;
+                return new Version(major, minor, build, revision);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Extracts the extension version from a resolved server.js path for display.
+        /// Walks up from out\server\src\server.js to the extension folder.
+        /// </summary>
+        private string ExtractVersionFromExtensionPath(string serverJsPath)
+        {
+            try
+            {
+                string folder = Path.GetFileName(
+                    Path.GetDirectoryName(
+                        Path.GetDirectoryName(
+                            Path.GetDirectoryName(
+                                Path.GetDirectoryName(serverJsPath)))));
+                const string prefix = "msarson.clarion-extensions-";
+                if (folder != null && folder.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    return folder.Substring(prefix.Length);
+            }
+            catch { }
             return null;
         }
 
@@ -3323,7 +3775,8 @@ EXAMPLES:
             if (string.IsNullOrEmpty(slnPath)) return;
 
             string wsPath = Path.GetDirectoryName(slnPath);
-            string serverJs = ResolveLspServerPath();
+            string ignoredSource;
+            string serverJs = ResolveLspServerPath(out ignoredSource);
             if (serverJs == null) return;
 
             if (_lspClient != null) _lspClient.Dispose();
