@@ -47,6 +47,13 @@ namespace ClarionAssistant
         // multiterminal-channel plugin a unique agent name.
         private int _caTabCounter;
 
+        // LSP UI state: diagnostics pill + activity strip
+        private System.Windows.Forms.Timer _lspUiTimer;
+        private readonly List<string> _lspActivityBuffer = new List<string>();
+        private string _lastDiagFile;
+        private int _lastDiagErrors = -1;
+        private int _lastDiagWarnings = -1;
+
         public string CurrentSolutionPath { get { return _currentSlnPath; } }
         public SettingsService Settings { get { return _settings; } }
         public ClarionVersionConfig CurrentVersionConfig { get { return _currentVersionConfig; } }
@@ -262,6 +269,21 @@ namespace ClarionAssistant
                 case "themeChanged": OnThemeChanged(e.Data); break;
                 case "cheatSheet": OnCheatSheet(); break;
                 case "docs": OnDocs(); break;
+                case "diagnosticClick": OnDiagnosticClick(e.Data); break;
+            }
+        }
+
+        private void OnDiagnosticClick(string lineStr)
+        {
+            int line;
+            if (!string.IsNullOrEmpty(lineStr) && int.TryParse(lineStr, out line))
+            {
+                try
+                {
+                    // LSP lines are 0-based; go_to_line is 1-based
+                    _editorService.GoToLine(line + 1);
+                }
+                catch { }
             }
         }
 
@@ -795,6 +817,103 @@ namespace ClarionAssistant
 
         private string _lastStatusLineJson;
         private string _lastStatusLineTabId;
+
+        // ── LSP UI polling: diagnostics pill + activity strip ──────────────
+
+        private bool _lspEventWired;
+
+        private void PollLspUi()
+        {
+            try
+            {
+                if (_header == null || !_header.IsReady) return;
+
+                // Wire up the OnLspRequest event once the LspClient is available
+                var lsp = _toolRegistry?.LspClientInstance;
+                if (lsp != null && !_lspEventWired)
+                {
+                    _lspEventWired = true;
+                    lsp.OnLspRequest += OnLspRequest;
+                }
+
+                if (lsp == null || !lsp.IsRunning)
+                {
+                    _header.SetDiagnosticsCount(0, 0, null, hidden: true);
+                    return;
+                }
+
+                // Read diagnostics for the last file the LSP operated on
+                string filePath = lsp.LastActiveFilePath;
+                if (string.IsNullOrEmpty(filePath))
+                {
+                    _header.SetDiagnosticsCount(0, 0, null, hidden: true);
+                    return;
+                }
+
+                // Deduplicate diagnostics by (line, message) — the Clarion LSP server
+                // can emit the same diagnostic dozens of times per analysis cycle.
+                var raw = lsp.GetCachedDiagnostics(filePath);
+                List<Services.LspClient.DiagnosticEntry> entries = null;
+                int errors = 0, warnings = 0;
+                if (raw != null && raw.Count > 0)
+                {
+                    var seen = new HashSet<string>();
+                    entries = new List<Services.LspClient.DiagnosticEntry>();
+                    foreach (var e in raw)
+                    {
+                        string key = e.Line + "|" + e.Severity + "|" + (e.Message ?? "");
+                        if (seen.Add(key))
+                        {
+                            entries.Add(e);
+                            if (e.Severity == 1) errors++;
+                            else if (e.Severity == 2) warnings++;
+                        }
+                    }
+                }
+
+                // Only update if the file or counts changed (avoid flicker)
+                if (filePath != _lastDiagFile || errors != _lastDiagErrors || warnings != _lastDiagWarnings)
+                {
+                    _lastDiagFile = filePath;
+                    _lastDiagErrors = errors;
+                    _lastDiagWarnings = warnings;
+                    _header.SetDiagnosticsCount(errors, warnings, entries);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("[ClaudeChatControl] PollLspUi error: " + ex.Message);
+            }
+        }
+
+        private void OnLspRequest(string tool, string target)
+        {
+            try
+            {
+                string item = tool + ": " + target;
+
+                // Dedupe: skip if identical to the most recent entry
+                lock (_lspActivityBuffer)
+                {
+                    if (_lspActivityBuffer.Count > 0 && _lspActivityBuffer[0] == item)
+                        return;
+                    _lspActivityBuffer.Insert(0, item);
+                    while (_lspActivityBuffer.Count > 5)
+                        _lspActivityBuffer.RemoveAt(5);
+                }
+
+                // Marshal to UI thread to update the header
+                if (!IsDisposed && !_header.IsDisposed)
+                {
+                    string[] snapshot;
+                    lock (_lspActivityBuffer) { snapshot = _lspActivityBuffer.ToArray(); }
+                    try { BeginInvoke((Action)(() => _header.SetLspActivity(snapshot))); }
+                    catch (ObjectDisposedException) { }
+                    catch (InvalidOperationException) { }
+                }
+            }
+            catch { }
+        }
 
         private void PollStatusLine()
         {
@@ -2089,6 +2208,11 @@ namespace ClarionAssistant
             _statusLineTimer = new System.Windows.Forms.Timer { Interval = 3000 };
             _statusLineTimer.Tick += (s, ev) => PollStatusLine();
             _statusLineTimer.Start();
+
+            // Poll LSP diagnostics for the header pill (2s interval, cache-only reads)
+            _lspUiTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+            _lspUiTimer.Tick += (s, ev) => PollLspUi();
+            _lspUiTimer.Start();
         }
 
         #endregion
@@ -2570,6 +2694,7 @@ namespace ClarionAssistant
                 if (_tabManager != null) _tabManager.Dispose();
                 if (_mcpServer != null) _mcpServer.Dispose();
                 if (_knowledgeService != null) _knowledgeService.Dispose();
+                if (_lspUiTimer != null) { _lspUiTimer.Stop(); _lspUiTimer.Dispose(); }
                 if (_instanceStateTimer != null) { _instanceStateTimer.Stop(); _instanceStateTimer.Dispose(); }
                 if (_statusLineTimer != null) { _statusLineTimer.Stop(); _statusLineTimer.Dispose(); }
                 if (_instanceCoord != null) _instanceCoord.Dispose();

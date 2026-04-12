@@ -35,6 +35,13 @@ namespace ClarionAssistant.Services
         private readonly AppTreeService _appTree;
         private ClaudeChatControl _chatControl;
         private LspClient _lspClient;
+
+        /// <summary>
+        /// Exposes the LspClient so ClaudeChatControl can subscribe to its events
+        /// (OnLspRequest for the activity strip) and poll GetCachedDiagnostics
+        /// for the header diagnostics pill. May be null if LSP hasn't started yet.
+        /// </summary>
+        public LspClient LspClientInstance { get { return _lspClient; } }
         private DiffService _diffService;
         private DocGraphService _docGraph;
         private ClarionTraceService _traceService;

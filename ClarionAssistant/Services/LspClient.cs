@@ -28,6 +28,18 @@ namespace ClarionAssistant.Services
         private volatile bool _running;
         private Dictionary<string, object> _pendingUpdatePaths;
 
+        // Tracks the last file path any LSP tool operated on. Used by the header
+        // diagnostics pill to know which file's diagnostics to display.
+        private string _lastActiveFilePath;
+        public string LastActiveFilePath { get { return _lastActiveFilePath; } }
+
+        /// <summary>
+        /// Fired on each LSP request with (toolName, targetDescription).
+        /// Used by the header activity strip to show "hover: UpdateProducts" etc.
+        /// Fires on the calling thread — UI consumers must marshal via BeginInvoke.
+        /// </summary>
+        public event Action<string, string> OnLspRequest;
+
         // Diagnostics cache — populated by textDocument/publishDiagnostics notifications.
         // Keyed by canonical file URI (always built via FilePathToUri to avoid encoding drift).
         // LRU-bounded at 50 entries; oldest-by-LastUpdateTicks is evicted on insert.
@@ -268,6 +280,7 @@ namespace ClarionAssistant.Services
         /// </summary>
         public Dictionary<string, object> GetDefinition(string filePath, int line, int character)
         {
+            TrackRequest("definition", filePath);
             return SendTextDocumentPositionRequest("textDocument/definition", filePath, line, character);
         }
 
@@ -276,6 +289,7 @@ namespace ClarionAssistant.Services
         /// </summary>
         public Dictionary<string, object> GetReferences(string filePath, int line, int character)
         {
+            TrackRequest("references", filePath);
             var parms = BuildTextDocumentPosition(filePath, line, character);
             parms["context"] = new Dictionary<string, object> { { "includeDeclaration", true } };
             return SendRequest("textDocument/references", parms);
@@ -286,6 +300,7 @@ namespace ClarionAssistant.Services
         /// </summary>
         public Dictionary<string, object> GetHover(string filePath, int line, int character)
         {
+            TrackRequest("hover", filePath);
             return SendTextDocumentPositionRequest("textDocument/hover", filePath, line, character);
         }
 
@@ -294,6 +309,7 @@ namespace ClarionAssistant.Services
         /// </summary>
         public Dictionary<string, object> GetDocumentSymbols(string filePath)
         {
+            TrackRequest("symbols", filePath);
             EnsureDocumentOpen(filePath);
             var parms = new Dictionary<string, object>
             {
@@ -307,6 +323,7 @@ namespace ClarionAssistant.Services
         /// </summary>
         public Dictionary<string, object> FindWorkspaceSymbol(string query)
         {
+            TrackRequest("find-symbol", query);
             var parms = new Dictionary<string, object> { { "query", query } };
             return SendRequest("workspace/symbol", parms);
         }
@@ -319,10 +336,22 @@ namespace ClarionAssistant.Services
         /// </summary>
         public Dictionary<string, object> Rename(string filePath, int line, int character, string newName)
         {
+            TrackRequest("rename", filePath);
             EnsureDocumentOpen(filePath);
             var parms = BuildTextDocumentPosition(filePath, line, character);
             parms["newName"] = newName;
             return SendRequest("textDocument/rename", parms, 8000);
+        }
+
+        private void TrackRequest(string tool, string target)
+        {
+            if (!string.IsNullOrEmpty(target))
+            {
+                // Extract just the filename for display, keep full path for lookup
+                _lastActiveFilePath = target;
+            }
+            try { OnLspRequest?.Invoke(tool, System.IO.Path.GetFileName(target ?? "")); }
+            catch { }
         }
 
         #endregion
@@ -343,6 +372,7 @@ namespace ClarionAssistant.Services
         {
             var result = new DiagnosticWaitResult { Entries = new List<DiagnosticEntry>(), Pending = true };
             if (!IsRunning || string.IsNullOrEmpty(filePath)) return result;
+            TrackRequest("diagnostics", filePath);
 
             // Trigger server analysis before waiting. We always force a new publish
             // so Claude sees the state of the file as of this call — stale cached
