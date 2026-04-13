@@ -236,7 +236,7 @@ Clarion Assistant exposes **90+ MCP tools** that Claude uses to interact with th
 
 ## Claude Code Skills
 
-The installer includes 21 Clarion-specific skills for Claude Code (installed as a plugin):
+The installer includes 22 Clarion-specific skills for Claude Code (installed as a plugin):
 
 | Skill | Description |
 |---|---|
@@ -247,6 +247,7 @@ The installer includes 21 Clarion-specific skills for Claude Code (installed as 
 | `clarion-convert-driver` | Convert Clarion dictionaries between file drivers (e.g., TopSpeed to SQLite) |
 | `evaluate-code` | Evaluate Clarion app code for issues and improvements |
 | `jfiles` | jFiles JSON serialization patterns for Clarion |
+| `lsp-diagnostics` | Run LSP diagnostics across all source files in the open solution with navigate-to-error support |
 | `ClarionCOM` | Interactive COM development assistant |
 | `clarioncom-build` | Build COM projects with MSBuild |
 | `clarioncom-config` | Manage ClarionCOM settings |
