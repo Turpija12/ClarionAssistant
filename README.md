@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/peterparker57/ClarionAssistant/releases/latest"><img src="https://img.shields.io/github/v/release/peterparker57/ClarionAssistant?include_prereleases&label=download&style=for-the-badge" alt="Download"></a>
   <img src="https://img.shields.io/badge/Clarion-10%20%7C%2011%20%7C%2012-blue?style=for-the-badge" alt="Clarion 10 | 11 | 12">
-  <img src="https://img.shields.io/badge/version-3.1-green?style=for-the-badge" alt="v3.1">
+  <img src="https://img.shields.io/badge/version-4.0-green?style=for-the-badge" alt="v4.0">
 </p>
 
 ---
@@ -27,6 +27,7 @@ Ask it to write Clarion code, explain procedures, refactor classes, build COM co
 
 - **Write and edit Clarion code** directly in the IDE editor
 - **Multi-tab terminal** &mdash; multiple Claude Code sessions with independent workspaces
+- **Language Server (LSP)** &mdash; real-time code intelligence with go-to-definition, find references, hover info, diagnostics, and rename support
 - **CodeGraph** &mdash; solution-wide code intelligence via SQL queries over every symbol, relationship, and call chain
 - **DocGraph** &mdash; instant search across 14,000+ indexed documentation chunks (Clarion core, CapeSoft, Icetips, and more)
 - **SchemaGraph** &mdash; database schema intelligence from Clarion dictionaries, SQL Server, SQLite, and PostgreSQL
@@ -38,6 +39,35 @@ Ask it to write Clarion code, explain procedures, refactor classes, build COM co
 - **Diff viewer** &mdash; Monaco-based side-by-side diffs with syntax highlighting
 - **Knowledge system** &mdash; persistent cross-session memory for decisions, patterns, and gotchas
 - **Zoom persistence** &mdash; Ctrl+mousewheel zoom is saved and restored across sessions
+
+---
+
+## What's New in v4.0
+
+### Clarion Language Server (LSP)
+- **Bundled in the installer** &mdash; real-time code intelligence with zero setup
+- **9 LSP tools** &mdash; go-to-definition, find references, hover info, document symbols, workspace symbol search, diagnostics, and rename support
+- **Ships with Node.js runtime** and all required dependencies &mdash; no separate install needed
+- **`/lsp-diagnostics` skill** &mdash; run diagnostics across every source file in the open solution with navigate-to-error support
+- **LSP Status Bar** &mdash; live language server status displayed on each terminal tab
+
+### Schema Graph Database
+- **Per-project SQLite schema index** for Clarion dictionaries and SQL databases
+- **.dctx XML parser** &mdash; extracts tables, columns, keys, and relationships from Clarion dictionary exports
+- **SQL Server extraction** &mdash; tables, columns, keys, foreign keys, stored procedures, functions, and views
+- **Merge logic** &mdash; matches SQL tables to existing dictionary tables by name, adds SQL-only tables
+- **FTS5 full-text search** &mdash; fuzzy name search across tables and columns
+- **10 MCP tools** &mdash; `ingest_schema`, `ingest_sql_database`, `search_tables`, `get_table`, `search_columns`, `get_relationships`, `query_schema`, `schema_stats`, `export_dctx`, `import_dctx`
+
+### 108 MCP Tools
+- Up from ~30 documented tools in v3.1 to **108 fully documented tools** across 12 categories
+- New categories: LSP, File System & Search, Multi-Instance Coordination, Validation
+
+### Installer
+- **Code-signed** with Sectigo EV certificate (Kennewick Computer Company)
+- **22 Clarion development skills** (up from 17)
+- **LSP server** distributed as an optional component for Clarion 10, 11, and 12
+- Updated prerequisites &mdash; optional [Everything](https://www.voidtools.com) integration for fast file search
 
 ---
 
