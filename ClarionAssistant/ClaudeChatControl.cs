@@ -936,7 +936,7 @@ namespace ClarionAssistant
             try
             {
                 var tab = _tabManager?.ActiveTab;
-                if (tab == null || tab.IsHome || !tab.ClaudeLaunched || tab.Renderer == null) return;
+                if (tab == null || tab.IsHome || !tab.AssistantLaunched || tab.Renderer == null) return;
                 if (!string.Equals(tab.AssistantBackend, "Claude", StringComparison.OrdinalIgnoreCase)) return;
 
                 string filePath = Path.Combine(Path.GetTempPath(), "ca-statusline-" + tab.Id + ".json");
@@ -2353,9 +2353,9 @@ namespace ClarionAssistant
 
         private void LaunchClaudeForTab(TerminalTab tab)
         {
-            System.Diagnostics.Debug.WriteLine("[LaunchClaude] ENTER tab=" + tab.Id + ", ClaudeLaunched=" + tab.ClaudeLaunched);
-            if (tab.ClaudeLaunched) return;
-            tab.ClaudeLaunched = true;
+            System.Diagnostics.Debug.WriteLine("[LaunchClaude] ENTER tab=" + tab.Id + ", AssistantLaunched=" + tab.AssistantLaunched);
+            if (tab.AssistantLaunched) return;
+            tab.AssistantLaunched = true;
             tab.AssistantBackend = "Claude";
 
             try
@@ -2510,9 +2510,9 @@ namespace ClarionAssistant
 
         private void LaunchCopilotForTab(TerminalTab tab)
         {
-            System.Diagnostics.Debug.WriteLine("[LaunchCopilot] ENTER tab=" + tab.Id + ", ClaudeLaunched=" + tab.ClaudeLaunched);
-            if (tab.ClaudeLaunched) return;
-            tab.ClaudeLaunched = true;
+            System.Diagnostics.Debug.WriteLine("[LaunchCopilot] ENTER tab=" + tab.Id + ", AssistantLaunched=" + tab.AssistantLaunched);
+            if (tab.AssistantLaunched) return;
+            tab.AssistantLaunched = true;
             tab.AssistantBackend = "Copilot";
 
             try
@@ -2531,7 +2531,10 @@ namespace ClarionAssistant
                             "Copilot CLI", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     }
                     catch { }
-                    tab.ClaudeLaunched = false;
+                    tab.AssistantLaunched = false;
+                    tab.AssistantBackend = null;
+                    try { if (tab.Terminal != null) tab.Terminal.Dispose(); } catch { }
+                    tab.Terminal = null;
                     return;
                 }
 
@@ -2633,7 +2636,7 @@ namespace ClarionAssistant
                 try
                 {
                     // Skip early output — Claude Code takes several seconds to initialize
-                    if (!tab.ClaudeLaunched) { /* terminal not ready yet */ }
+                    if (!tab.AssistantLaunched) { /* terminal not ready yet */ }
                     else
                     {
                         string text = Encoding.UTF8.GetString(data);
@@ -2670,7 +2673,7 @@ namespace ClarionAssistant
 
         private void OnTabTerminalProcessExited(TerminalTab tab)
         {
-            tab.ClaudeLaunched = false;
+            tab.AssistantLaunched = false;
 
             if (_knowledgeService != null && tab.SessionId > 0)
             {

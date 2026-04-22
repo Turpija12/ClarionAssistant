@@ -122,20 +122,11 @@ namespace ClarionAssistant.Services
 
         public string GenerateMcpConfig(McpConfigFormat format = McpConfigFormat.Claude)
         {
-            // Build tool list from all registered tools (Claude: autoApprove; Copilot: tools allowlist)
-            var toolNames = new List<string>();
-            foreach (var tool in _toolRegistry.GetToolDefinitions())
-            {
-                var name = tool.ContainsKey("name") ? tool["name"] as string : null;
-                if (!string.IsNullOrEmpty(name))
-                    toolNames.Add("mcp__clarion-assistant__" + name);
-            }
-
             var servers = new Dictionary<string, object>();
             if (format == McpConfigFormat.Copilot)
             {
                 // Copilot MCP schema requires per-server tools allowlist.
-                // Start with tools:["*"] (decided) to avoid name/namespace mismatches early on.
+                // Use ["*"] to avoid name/namespace mismatches with the mcp__clarion-assistant__ prefix.
                 servers["clarion-assistant"] = new Dictionary<string, object>
                 {
                     { "type", "http" },
@@ -145,6 +136,13 @@ namespace ClarionAssistant.Services
             }
             else
             {
+                var toolNames = new List<string>();
+                foreach (var tool in _toolRegistry.GetToolDefinitions())
+                {
+                    var name = tool.ContainsKey("name") ? tool["name"] as string : null;
+                    if (!string.IsNullOrEmpty(name))
+                        toolNames.Add("mcp__clarion-assistant__" + name);
+                }
                 servers["clarion-assistant"] = new Dictionary<string, object>
                 {
                     { "type", "http" },
