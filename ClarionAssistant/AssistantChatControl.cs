@@ -1706,7 +1706,7 @@ namespace ClarionAssistant
 
         private static string ResolveTpsPreviewerPath()
         {
-            string assemblyDir = Path.GetDirectoryName(typeof(ClaudeChatControl).Assembly.Location);
+            string assemblyDir = Path.GetDirectoryName(typeof(AssistantChatControl).Assembly.Location);
             string[] candidates = new[]
             {
                 Path.Combine(assemblyDir, "TpsPreviewer.exe"),
