@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/peterparker57/ClarionAssistant/releases/latest"><img src="https://img.shields.io/github/v/release/peterparker57/ClarionAssistant?include_prereleases&label=download&style=for-the-badge" alt="Download"></a>
   <img src="https://img.shields.io/badge/Clarion-10%20%7C%2011%20%7C%2012-blue?style=for-the-badge" alt="Clarion 10 | 11 | 12">
-  <img src="https://img.shields.io/badge/version-4.6-green?style=for-the-badge" alt="v4.6">
+  <img src="https://img.shields.io/badge/version-4.7-green?style=for-the-badge" alt="v4.7">
 </p>
 
 ---
@@ -40,6 +40,21 @@ Ask it to write Clarion code, explain procedures, refactor classes, build COM co
 - **Diff viewer** &mdash; Monaco-based side-by-side diffs with syntax highlighting
 - **Knowledge system** &mdash; persistent cross-session memory for decisions, patterns, and gotchas
 - **Zoom persistence** &mdash; Ctrl+mousewheel zoom is saved and restored across sessions
+
+---
+
+## What's New in v4.7
+
+### TPS folders, preview, and standalone viewer
+
+Clarion Assistant now has a practical TPS workflow that works both inside the IDE and outside it.
+
+- **TPS Folder schema sources** &mdash; Schema Sources can now index a selected folder of `.tps` files recursively into SchemaGraph, with skipped/damaged files reported instead of aborting the whole ingest.
+- **Read-only TPS MCP tools** &mdash; new TPS tools let the assistant list tables, describe fields, and sample rows directly from Clarion TPS files.
+- **Preview from Schema Sources** &mdash; indexed TPS Folder sources now expose a **Preview** action.
+- **Standalone `TpsPreviewer` app** &mdash; the Preview action launches a native WinForms TPS viewer outside the IDE, and the solution now includes that standalone project.
+- **Filtering and sorting** &mdash; the standalone previewer supports table filtering, free-text row filtering, and sortable preview columns.
+- **Croatian/Central European text fix** &mdash; shared TPS decoding now uses **Windows-1250**, so diacritics such as `č`, `ć`, `ž`, `š`, and `đ` render correctly in both the addin and the standalone viewer.
 
 ---
 
