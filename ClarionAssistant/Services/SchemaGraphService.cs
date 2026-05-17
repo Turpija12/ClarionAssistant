@@ -403,6 +403,202 @@ namespace ClarionAssistant.Services
         }
 
         /// <summary>
+        /// Ingest schema from all readable TPS files under a folder into the SchemaGraph database.
+        /// </summary>
+        public string IngestTpsFolder(string folderPath, bool recursive = true)
+        {
+            if (string.IsNullOrEmpty(folderPath))
+                return "Error: TPS folder path is required";
+            if (!Directory.Exists(folderPath))
+                return "Error: Folder not found: " + folderPath;
+
+            string[] tpsFiles;
+            try
+            {
+                tpsFiles = Directory.GetFiles(folderPath, "*.tps", recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
+                Array.Sort(tpsFiles, StringComparer.OrdinalIgnoreCase);
+            }
+            catch (Exception ex)
+            {
+                return "Error: Failed to enumerate TPS files: " + ex.Message;
+            }
+
+            if (tpsFiles.Length == 0)
+                return "Error: No .tps files found in folder \"" + folderPath + "\"";
+
+            var tpsService = new TpsService();
+
+            using (var conn = OpenConnection(readOnly: false))
+            using (var tx = conn.BeginTransaction())
+            {
+                try
+                {
+                    ClearAllData(conn);
+
+                    int readableFileCount = 0;
+                    int skippedFileCount = 0;
+                    int tableCount = 0;
+                    int columnCount = 0;
+                    int keyCount = 0;
+                    int memoCount = 0;
+                    var skippedFiles = new List<string>();
+
+                    foreach (string tpsFile in tpsFiles)
+                    {
+                        try
+                        {
+                            var tables = tpsService.ListTables(tpsFile);
+                            if (tables == null || tables.Count == 0)
+                            {
+                                skippedFileCount++;
+                                skippedFiles.Add(Path.GetFileName(tpsFile) + " (no tables found)");
+                                continue;
+                            }
+
+                            readableFileCount++;
+                            string relativePath = GetRelativeSourcePath(folderPath, tpsFile);
+
+                            foreach (var table in tables)
+                            {
+                                int tableNumber = GetIntValue(table, "tableNumber");
+                                var details = tpsService.DescribeTable(tpsFile, tableNumber.ToString());
+
+                                string rawTableName = GetStringValue(details, "name");
+                                string tableName = BuildTpsTableName(relativePath, rawTableName, tableNumber);
+                                string tableDescription = BuildTpsTableDescription(relativePath, rawTableName, tableNumber);
+                                string tableGuid = string.Format("tps:{0}:{1}", relativePath, tableNumber);
+
+                                long tableId = InsertTable(
+                                    conn,
+                                    tableGuid,
+                                    tableName,
+                                    "",
+                                    "TPS",
+                                    tableDescription,
+                                    tpsFile,
+                                    "tps",
+                                    relativePath);
+                                tableCount++;
+
+                                int ordinal = 0;
+                                foreach (var field in GetDictionaryListValue(details, "fields"))
+                                {
+                                    string fieldName = GetStringValue(field, "fullName");
+                                    if (string.IsNullOrEmpty(fieldName))
+                                        fieldName = GetStringValue(field, "name");
+
+                                    string fieldDescription = "TPS field #" + GetIntValue(field, "index");
+                                    if (GetBoolValue(field, "isArray"))
+                                        fieldDescription += " (array x" + Math.Max(1, GetIntValue(field, "elementCount")) + ")";
+
+                                    InsertColumn(
+                                        conn,
+                                        string.Format("tps:{0}:{1}:field:{2}", relativePath, tableNumber, fieldName),
+                                        tableId,
+                                        fieldName,
+                                        GetStringValue(field, "type"),
+                                        GetIntValue(field, "length"),
+                                        GetIntValue(field, "places"),
+                                        "",
+                                        "",
+                                        fieldDescription,
+                                        ordinal++);
+                                    columnCount++;
+                                }
+
+                                foreach (var memo in GetDictionaryListValue(details, "memos"))
+                                {
+                                    string memoName = GetStringValue(memo, "fullName");
+                                    if (string.IsNullOrEmpty(memoName))
+                                        memoName = GetStringValue(memo, "name");
+
+                                    bool isBlob = GetBoolValue(memo, "isBlob");
+                                    InsertColumn(
+                                        conn,
+                                        string.Format("tps:{0}:{1}:memo:{2}", relativePath, tableNumber, memoName),
+                                        tableId,
+                                        memoName,
+                                        isBlob ? "BLOB" : "MEMO",
+                                        0,
+                                        0,
+                                        "",
+                                        "",
+                                        isBlob ? "TPS blob field" : "TPS memo field",
+                                        ordinal++);
+                                    columnCount++;
+                                    memoCount++;
+                                }
+
+                                foreach (var index in GetDictionaryListValue(details, "indexes"))
+                                {
+                                    string indexName = GetStringValue(index, "name");
+                                    if (string.IsNullOrEmpty(indexName))
+                                        indexName = "INDEX_" + (keyCount + 1);
+
+                                    InsertKey(
+                                        conn,
+                                        string.Format("tps:{0}:{1}:index:{2}", relativePath, tableNumber, indexName),
+                                        tableId,
+                                        indexName,
+                                        false,
+                                        false,
+                                        false,
+                                        false);
+                                    keyCount++;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            skippedFileCount++;
+                            skippedFiles.Add(Path.GetFileName(tpsFile) + " (" + ex.Message + ")");
+                        }
+                    }
+
+                    if (tableCount == 0)
+                    {
+                        tx.Rollback();
+                        return "Error: No readable TPS tables were found under \"" + folderPath + "\"";
+                    }
+
+                    SetMetadata(conn, "source_folder", folderPath);
+                    SetMetadata(conn, "source_type", "tps");
+                    SetMetadata(conn, "tps_recursive", recursive ? "true" : "false");
+                    SetMetadata(conn, "tps_ingested_at", DateTime.Now.ToString("o"));
+                    SetMetadata(conn, "tps_file_count", readableFileCount.ToString());
+                    SetMetadata(conn, "tps_skipped_file_count", skippedFileCount.ToString());
+                    SetMetadata(conn, "table_count", tableCount.ToString());
+                    SetMetadata(conn, "column_count", columnCount.ToString());
+                    SetMetadata(conn, "key_count", keyCount.ToString());
+                    SetMetadata(conn, "memo_count", memoCount.ToString());
+                    if (skippedFiles.Count > 0)
+                        SetMetadata(conn, "tps_skipped_files", string.Join(" | ", skippedFiles.ToArray()));
+
+                    RebuildFtsIndex(conn);
+                    tx.Commit();
+
+                    var summary = new StringBuilder();
+                    summary.AppendLine(string.Format("TPS schema ingested from \"{0}\":", folderPath));
+                    summary.AppendLine("  Search scope: " + (recursive ? "recursive" : "top-level"));
+                    summary.AppendLine("  Readable TPS files: " + readableFileCount);
+                    summary.AppendLine("  Tables: " + tableCount);
+                    summary.AppendLine("  Columns: " + columnCount);
+                    summary.AppendLine("  Memo/Blob fields: " + memoCount);
+                    summary.AppendLine("  Indexes: " + keyCount);
+                    if (skippedFileCount > 0)
+                        summary.AppendLine("  Skipped files: " + skippedFileCount);
+                    summary.AppendLine("  Database: " + _dbPath);
+                    return summary.ToString().TrimEnd();
+                }
+                catch (Exception ex)
+                {
+                    tx.Rollback();
+                    return "Error during TPS ingestion: " + ex.Message;
+                }
+            }
+        }
+
+        /// <summary>
         /// Ingest schema from a SQL Server database via connection string.
         /// If merge=true, adds SQL-only objects alongside existing dctx data.
         /// If merge=false, clears all existing data first.
@@ -2496,9 +2692,21 @@ namespace ClarionAssistant.Services
                         status["tableCount"] = Convert.ToInt32(cmd.ExecuteScalar());
                     using (var cmd = new SQLiteCommand("SELECT COUNT(*) FROM columns", conn))
                         status["columnCount"] = Convert.ToInt32(cmd.ExecuteScalar());
+                    using (var cmd = new SQLiteCommand("SELECT value FROM schema_metadata WHERE key='tps_skipped_file_count'", conn))
+                    {
+                        var val = cmd.ExecuteScalar();
+                        if (val != null && val != DBNull.Value)
+                            status["skippedFileCount"] = Convert.ToInt32(val);
+                    }
+                    using (var cmd = new SQLiteCommand("SELECT value FROM schema_metadata WHERE key='tps_skipped_files'", conn))
+                    {
+                        var val = cmd.ExecuteScalar();
+                        if (val != null && val != DBNull.Value)
+                            status["skippedFiles"] = val.ToString();
+                    }
 
                     // Get last indexed time from metadata
-                    string[] metaKeys = { "ingested_at", "sql_ingested_at", "sqlite_ingested_at", "pg_ingested_at" };
+                    string[] metaKeys = { "ingested_at", "sql_ingested_at", "sqlite_ingested_at", "pg_ingested_at", "tps_ingested_at" };
                     foreach (string key in metaKeys)
                     {
                         using (var cmd = new SQLiteCommand("SELECT value FROM schema_metadata WHERE key=@k", conn))
@@ -2517,6 +2725,98 @@ namespace ClarionAssistant.Services
             catch { }
 
             return status;
+        }
+
+        public static List<Dictionary<string, object>> GetTpsPreviewTables(string sourceId, string sourceType, string connectionInfoJson)
+        {
+            var tables = new List<Dictionary<string, object>>();
+            if (!string.Equals(sourceType, "tps", StringComparison.OrdinalIgnoreCase))
+                return tables;
+
+            string dbPath = GetDbPathForSource(sourceId, sourceType, connectionInfoJson);
+            if (!File.Exists(dbPath))
+                return tables;
+
+            string connStr = "Data Source=" + dbPath + ";Version=3;Read Only=True;Journal Mode=WAL;";
+            using (var conn = new SQLiteConnection(connStr))
+            {
+                conn.Open();
+                using (var cmd = new SQLiteCommand(
+                    @"SELECT guid, name, source_file, description
+                      FROM tables
+                      WHERE source = 'tps'
+                      ORDER BY name, source_file", conn))
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        string guid = reader["guid"] != DBNull.Value ? reader["guid"].ToString() : "";
+                        string sourceFile = reader["source_file"] != DBNull.Value ? reader["source_file"].ToString() : "";
+                        tables.Add(new Dictionary<string, object>
+                        {
+                            { "guid", guid },
+                            { "name", reader["name"] != DBNull.Value ? reader["name"].ToString() : "" },
+                            { "sourceFile", sourceFile },
+                            { "sourceFileName", Path.GetFileName(sourceFile) },
+                            { "description", reader["description"] != DBNull.Value ? reader["description"].ToString() : "" },
+                            { "tableNumber", ExtractTpsTableNumber(guid) }
+                        });
+                    }
+                }
+            }
+
+            return tables;
+        }
+
+        public static Dictionary<string, object> PreviewTpsRows(string sourceId, string sourceType, string connectionInfoJson, string tableGuid, int limit)
+        {
+            if (!string.Equals(sourceType, "tps", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Preview rows is only supported for TPS sources.");
+            if (string.IsNullOrEmpty(tableGuid))
+                throw new ArgumentException("Table guid is required.", "tableGuid");
+
+            string dbPath = GetDbPathForSource(sourceId, sourceType, connectionInfoJson);
+            if (!File.Exists(dbPath))
+                throw new FileNotFoundException("SchemaGraph database not found for source.", dbPath);
+
+            string sourceFile = null;
+            string tableName = null;
+            string description = null;
+
+            string connStr = "Data Source=" + dbPath + ";Version=3;Read Only=True;Journal Mode=WAL;";
+            using (var conn = new SQLiteConnection(connStr))
+            {
+                conn.Open();
+                using (var cmd = new SQLiteCommand(
+                    @"SELECT name, source_file, description
+                      FROM tables
+                      WHERE guid = @guid
+                      LIMIT 1", conn))
+                {
+                    cmd.Parameters.AddWithValue("@guid", tableGuid);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (!reader.Read())
+                            throw new InvalidOperationException("TPS preview table not found: " + tableGuid);
+
+                        tableName = reader["name"] != DBNull.Value ? reader["name"].ToString() : "";
+                        sourceFile = reader["source_file"] != DBNull.Value ? reader["source_file"].ToString() : "";
+                        description = reader["description"] != DBNull.Value ? reader["description"].ToString() : "";
+                    }
+                }
+            }
+
+            if (string.IsNullOrEmpty(sourceFile))
+                throw new InvalidOperationException("TPS preview table is missing source file metadata.");
+
+            int tableNumber = ExtractTpsTableNumber(tableGuid);
+            var result = new TpsService().ReadRows(sourceFile, tableNumber.ToString(), limit);
+            result["schemaTableName"] = tableName;
+            result["sourceFile"] = sourceFile;
+            result["tableGuid"] = tableGuid;
+            if (!string.IsNullOrEmpty(description))
+                result["description"] = description;
+            return result;
         }
 
         // ── Index Dispatch ──
@@ -2558,6 +2858,15 @@ namespace ClarionAssistant.Services
                 case "postgres":
                     string pgConn = BuildPostgresConnectionString(connInfo);
                     return svc.IngestPostgresDatabase(pgConn);
+
+                case "tps":
+                    string folderPath = ExtractJsonValue(connInfo, "folderPath");
+                    if (string.IsNullOrEmpty(folderPath))
+                        folderPath = ExtractJsonValue(connInfo, "filePath");
+                    if (string.IsNullOrEmpty(folderPath))
+                        return "Error: No folderPath in connection info";
+                    bool recursive = !string.Equals(ExtractJsonValue(connInfo, "recursive"), "false", StringComparison.OrdinalIgnoreCase);
+                    return svc.IngestTpsFolder(folderPath, recursive);
 
                 default:
                     return "Error: Unknown source type: " + type;
@@ -2635,6 +2944,96 @@ namespace ClarionAssistant.Services
                 }
                 return sb.ToString();
             }
+        }
+
+        private static List<Dictionary<string, object>> GetDictionaryListValue(Dictionary<string, object> data, string key)
+        {
+            if (data == null || !data.ContainsKey(key) || data[key] == null)
+                return new List<Dictionary<string, object>>();
+
+            var list = data[key] as List<Dictionary<string, object>>;
+            return list ?? new List<Dictionary<string, object>>();
+        }
+
+        private static string GetStringValue(Dictionary<string, object> data, string key)
+        {
+            if (data == null || !data.ContainsKey(key) || data[key] == null)
+                return "";
+
+            return data[key].ToString();
+        }
+
+        private static int GetIntValue(Dictionary<string, object> data, string key)
+        {
+            if (data == null || !data.ContainsKey(key) || data[key] == null)
+                return 0;
+
+            try { return Convert.ToInt32(data[key]); }
+            catch { return 0; }
+        }
+
+        private static bool GetBoolValue(Dictionary<string, object> data, string key)
+        {
+            if (data == null || !data.ContainsKey(key) || data[key] == null)
+                return false;
+
+            try { return Convert.ToBoolean(data[key]); }
+            catch { return false; }
+        }
+
+        private static string GetRelativeSourcePath(string rootFolder, string filePath)
+        {
+            if (string.IsNullOrEmpty(rootFolder) || string.IsNullOrEmpty(filePath))
+                return filePath ?? "";
+
+            string root = rootFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (filePath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                return filePath.Substring(root.Length);
+
+            return Path.GetFileName(filePath);
+        }
+
+        private static string BuildTpsTableName(string relativePath, string rawTableName, int tableNumber)
+        {
+            string relativeStem = Path.ChangeExtension(relativePath, null) ?? relativePath;
+            relativeStem = relativeStem.Replace('\\', '.').Replace('/', '.');
+            string fileStem = Path.GetFileNameWithoutExtension(relativePath) ?? relativeStem;
+            bool isUnnamed = string.IsNullOrEmpty(rawTableName) ||
+                rawTableName.Equals("UNNAMED", StringComparison.OrdinalIgnoreCase) ||
+                rawTableName.StartsWith("UNNAMED_", StringComparison.OrdinalIgnoreCase);
+
+            if (isUnnamed)
+                return string.IsNullOrEmpty(relativeStem) ? "TPS_TABLE_" + tableNumber : relativeStem;
+
+            if (rawTableName.Equals(fileStem, StringComparison.OrdinalIgnoreCase))
+                return string.IsNullOrEmpty(relativeStem) ? rawTableName : relativeStem;
+
+            return string.IsNullOrEmpty(relativeStem) ? rawTableName : relativeStem + "." + rawTableName;
+        }
+
+        private static string BuildTpsTableDescription(string relativePath, string rawTableName, int tableNumber)
+        {
+            string description = "TPS file: " + relativePath;
+            if (!string.IsNullOrEmpty(rawTableName))
+                description += "; table: " + rawTableName;
+            description += "; table number: " + tableNumber;
+            return description;
+        }
+
+        private static int ExtractTpsTableNumber(string tableGuid)
+        {
+            if (string.IsNullOrEmpty(tableGuid))
+                return 1;
+
+            int lastColon = tableGuid.LastIndexOf(':');
+            if (lastColon >= 0 && lastColon + 1 < tableGuid.Length)
+            {
+                int tableNumber;
+                if (int.TryParse(tableGuid.Substring(lastColon + 1), out tableNumber) && tableNumber > 0)
+                    return tableNumber;
+            }
+
+            return 1;
         }
 
         private static SQLiteConnection OpenGlobalConnection(bool readOnly)

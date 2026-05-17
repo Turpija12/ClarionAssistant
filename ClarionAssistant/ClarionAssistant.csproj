@@ -122,6 +122,7 @@
     <Compile Include="Services\CodexProcessManager.cs" />
     <Compile Include="Services\CodexConfigService.cs" />
     <Compile Include="Services\PwshCommandQuoter.cs" />
+    <Compile Include="Services\TpsService.cs" />
     <Compile Include="TaskLifecycleBoard\TaskLifecycleBoardForm.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <!-- CodeGraph engine (self-contained, no external dependencies) -->
@@ -197,6 +198,9 @@
     <PackageReference Include="Microsoft.Web.WebView2">
       <Version>1.0.3800.47</Version>
       <GeneratePathProperty>true</GeneratePathProperty>
+    </PackageReference>
+    <PackageReference Include="TpsParser">
+      <Version>5.0.0</Version>
     </PackageReference>
   </ItemGroup>
   <Target Name="ValidateClarionReferences" BeforeTargets="ResolveReferences">

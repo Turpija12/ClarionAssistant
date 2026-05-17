@@ -3114,6 +3114,7 @@ Rebuilds both the bundled and the personal DocGraph DBs when both exist.",
 
             // ── SchemaGraph Tools ─────────────────────────────────────────
             RegisterSchemaGraphTools();
+            RegisterTpsTools();
         }
 
         // ── SchemaGraph Tools ─────────────────────────────────────────
@@ -3430,6 +3431,104 @@ Rebuilds both the bundled and the personal DocGraph DBs when both exist.",
                         return "Error: SchemaGraph database not found. Run ingest_schema first or provide db_path.";
 
                     return service.GetStats();
+                }
+            });
+
+            // === TPS Tools ===
+        }
+
+        private void RegisterTpsTools()
+        {
+            Register(new McpTool
+            {
+                Name = "list_tps_tables",
+                Description = "List tables contained in a Clarion TPS file. Returns table number, name, field count, memo count, and index count.",
+                InputSchema = McpJsonRpc.BuildSchema(new Dictionary<string, string>
+                {
+                    { "tps_path", "Path to the .tps file" },
+                    { "password?", "Optional TPS owner/password for encrypted files" }
+                }),
+                RequiresUiThread = false,
+                Handler = args =>
+                {
+                    string tpsPath = McpJsonRpc.GetString(args, "tps_path");
+                    string password = McpJsonRpc.GetString(args, "password");
+                    if (string.IsNullOrEmpty(tpsPath))
+                        return "Error: tps_path is required";
+
+                    try
+                    {
+                        var service = new TpsService();
+                        return service.ListTables(tpsPath, password);
+                    }
+                    catch (Exception ex)
+                    {
+                        return "Error reading TPS tables: " + ex.Message;
+                    }
+                }
+            });
+
+            Register(new McpTool
+            {
+                Name = "describe_tps_table",
+                Description = "Describe one table inside a Clarion TPS file. Use a table name or table number. Returns fields and memo/blob definitions.",
+                InputSchema = McpJsonRpc.BuildSchema(new Dictionary<string, string>
+                {
+                    { "tps_path", "Path to the .tps file" },
+                    { "table?", "Table name or table number. Defaults to the first table if omitted." },
+                    { "password?", "Optional TPS owner/password for encrypted files" }
+                }),
+                RequiresUiThread = false,
+                Handler = args =>
+                {
+                    string tpsPath = McpJsonRpc.GetString(args, "tps_path");
+                    string table = McpJsonRpc.GetString(args, "table");
+                    string password = McpJsonRpc.GetString(args, "password");
+                    if (string.IsNullOrEmpty(tpsPath))
+                        return "Error: tps_path is required";
+
+                    try
+                    {
+                        var service = new TpsService();
+                        return service.DescribeTable(tpsPath, table, password);
+                    }
+                    catch (Exception ex)
+                    {
+                        return "Error describing TPS table: " + ex.Message;
+                    }
+                }
+            });
+
+            Register(new McpTool
+            {
+                Name = "read_tps_rows",
+                Description = "Read the first N rows from a table inside a Clarion TPS file. Use a table name or table number. Row values are returned as strings for spike-level inspection.",
+                InputSchema = McpJsonRpc.BuildSchema(new Dictionary<string, string>
+                {
+                    { "tps_path", "Path to the .tps file" },
+                    { "table?", "Table name or table number. Defaults to the first table if omitted." },
+                    { "limit?", "Maximum rows to return (default 50, max 500)" },
+                    { "password?", "Optional TPS owner/password for encrypted files" }
+                }),
+                RequiresUiThread = false,
+                Handler = args =>
+                {
+                    string tpsPath = McpJsonRpc.GetString(args, "tps_path");
+                    string table = McpJsonRpc.GetString(args, "table");
+                    string password = McpJsonRpc.GetString(args, "password");
+                    int limit = McpJsonRpc.GetInt(args, "limit", 50);
+                    if (string.IsNullOrEmpty(tpsPath))
+                        return "Error: tps_path is required";
+
+                    try
+                    {
+                        var service = new TpsService();
+                        return service.ReadRows(tpsPath, table, limit, password);
+                    }
+                    catch (Exception ex)
+                    {
+                        return "Error reading TPS rows: " + ex.Message;
+                    }
                 }
             });
 

@@ -20,6 +20,11 @@ $IndexerDir    = "H:\DevLaptop\ClarionLSP\indexer"
 $IndexerFile   = "$IndexerDir\ClarionIndexer.csproj"
 $IndexerOutput = "$IndexerDir\bin\Debug"
 
+# Standalone TPS previewer output
+$TpsPreviewerDir    = Join-Path (Split-Path $ProjectDir -Parent) "TpsPreviewer"
+$TpsPreviewerFile   = Join-Path $TpsPreviewerDir "TpsPreviewer.csproj"
+$TpsPreviewerOutput = Join-Path $TpsPreviewerDir "bin\Debug\net48"
+
 # Version-specific config
 $Versions = @{
     "12" = @{ Root = "C:\Clarion12";                           Output = "bin\Debug-C12" }
@@ -49,15 +54,10 @@ if ($Version -eq "all") {
     $TargetVersions = @($Version)
 }
 
-# Files and folders to deploy
-$Items = @(
-    "ClarionAssistant.dll"
-    "ClarionAssistant.pdb"
-    "ClarionAssistant.addin"
-    "Microsoft.Web.WebView2.Core.dll"
-    "Microsoft.Web.WebView2.WinForms.dll"
-    "Microsoft.Web.WebView2.Wpf.dll"
-    "WebView2Loader.dll"
+# Top-level directories to deploy. Top-level files are discovered from build output
+# so new runtime/package DLLs are copied automatically.
+$DirectoryItems = @(
+    "docs"
     "Terminal"
     "TaskLifecycleBoard"
     "runtimes"
@@ -104,6 +104,21 @@ if (-not $NoBuild) {
         Write-Host ""
         Write-Host "Skipping indexer build (project not found: $IndexerFile)" -ForegroundColor Yellow
     }
+
+    if (Test-Path $TpsPreviewerFile) {
+        Write-Host ""
+        Write-Host "Restoring standalone TPS previewer..." -ForegroundColor Cyan
+        & $MSBuild $TpsPreviewerFile /t:Restore /p:Configuration=Debug /v:minimal
+        if ($LASTEXITCODE -ne 0) { Write-Host "Standalone TPS previewer restore failed." -ForegroundColor Red; exit 1 }
+
+        Write-Host "Building standalone TPS previewer..." -ForegroundColor Cyan
+        & $MSBuild $TpsPreviewerFile /p:Configuration=Debug /v:minimal
+        if ($LASTEXITCODE -ne 0) { Write-Host "Standalone TPS previewer build failed." -ForegroundColor Red; exit 1 }
+        Write-Host "Standalone TPS previewer build succeeded." -ForegroundColor Green
+    } else {
+        Write-Host ""
+        Write-Host "Skipping standalone TPS previewer build (project not found: $TpsPreviewerFile)" -ForegroundColor Yellow
+    }
 }
 
 # --- Kill Clarion IDE if requested ---
@@ -143,6 +158,10 @@ foreach ($ver in $TargetVersions) {
 
         $copied = 0
         $failed = 0
+        $Items = @(
+            (Get-ChildItem $BuildOutput -File | Select-Object -ExpandProperty Name)
+            $DirectoryItems
+        )
 
         foreach ($item in $Items) {
             $src = Join-Path $BuildOutput $item
@@ -167,6 +186,26 @@ foreach ($ver in $TargetVersions) {
                 Write-Host "  FAIL  $item - $($_.Exception.Message)" -ForegroundColor Red
                 $failed++
             }
+        }
+
+        # --- Deploy standalone TPS previewer ---
+        if (Test-Path $TpsPreviewerOutput) {
+            foreach ($item in (Get-ChildItem $TpsPreviewerOutput -File | Select-Object -ExpandProperty Name)) {
+                $src = Join-Path $TpsPreviewerOutput $item
+                $dst = Join-Path $DeployDir $item
+
+                try {
+                    Copy-Item $src $dst -Force
+                    Write-Host "  OK    $item (TPS previewer)" -ForegroundColor Green
+                    $copied++
+                }
+                catch {
+                    Write-Host "  FAIL  $item - $($_.Exception.Message)" -ForegroundColor Red
+                    $failed++
+                }
+            }
+        } else {
+            Write-Host "  SKIP  TPS previewer output (not found: $TpsPreviewerOutput)" -ForegroundColor DarkGray
         }
 
         # --- Deploy indexer ---

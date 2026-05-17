@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Text;
+using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using ClarionAssistant.Dialogs;
 using ClarionAssistant.Services;
@@ -1198,14 +1199,18 @@ namespace ClarionAssistant
 
                     // Get index status
                     var status = Services.SchemaGraphService.GetSourceStatus(id, type, connInfo);
-                    bool indexed = (bool)status["indexed"];
-                    int tableCount = status.ContainsKey("tableCount") ? (int)status["tableCount"] : 0;
-                    string lastIndexed = status.ContainsKey("lastIndexed") ? (string)status["lastIndexed"] : null;
+                     bool indexed = (bool)status["indexed"];
+                     int tableCount = status.ContainsKey("tableCount") ? (int)status["tableCount"] : 0;
+                     string lastIndexed = status.ContainsKey("lastIndexed") ? (string)status["lastIndexed"] : null;
+                     int skippedFileCount = status.ContainsKey("skippedFileCount") ? (int)status["skippedFileCount"] : 0;
+                     string skippedFiles = status.ContainsKey("skippedFiles") ? (string)status["skippedFiles"] : null;
 
-                    sb.AppendFormat("{{\"id\":\"{0}\",\"name\":\"{1}\",\"type\":\"{2}\",\"indexed\":{3},\"tableCount\":{4},\"lastIndexed\":{5}}}",
+                    sb.AppendFormat("{{\"id\":\"{0}\",\"name\":\"{1}\",\"type\":\"{2}\",\"indexed\":{3},\"tableCount\":{4},\"lastIndexed\":{5},\"skippedFileCount\":{6},\"skippedFiles\":{7}}}",
                         EscJson(id), EscJson(name), EscJson(type),
                         indexed ? "true" : "false", tableCount,
-                        lastIndexed != null ? "\"" + EscJson(lastIndexed) + "\"" : "null");
+                        lastIndexed != null ? "\"" + EscJson(lastIndexed) + "\"" : "null",
+                        skippedFileCount,
+                        skippedFiles != null ? "\"" + EscJson(skippedFiles) + "\"" : "null");
                 }
                 sb.Append("]");
                 tab.SchemaSourcesView.SetSources(sb.ToString());
@@ -1306,6 +1311,18 @@ namespace ClarionAssistant
 
                 case "browseFile":
                     HandleBrowseFile(tab, e.Data);
+                    break;
+
+                case "launchTpsPreviewer":
+                    HandleLaunchTpsPreviewer(tab, e.Data);
+                    break;
+
+                case "getTpsPreviewTables":
+                    HandleGetTpsPreviewTables(tab, e.Data);
+                    break;
+
+                case "previewTpsRows":
+                    HandlePreviewTpsRows(tab, e.Data);
                     break;
             }
         }
@@ -1475,8 +1492,13 @@ namespace ClarionAssistant
                     {
                         int tCount = status.ContainsKey("tableCount") ? (int)status["tableCount"] : 0;
                         string lastIdx = status.ContainsKey("lastIndexed") ? (string)status["lastIndexed"] : null;
-                        statusJson = string.Format("{{\"tableCount\":{0},\"lastIndexed\":{1}}}",
-                            tCount, lastIdx != null ? "\"" + EscJson(lastIdx) + "\"" : "null");
+                        int skippedFileCount = status.ContainsKey("skippedFileCount") ? (int)status["skippedFileCount"] : 0;
+                        string skippedFiles = status.ContainsKey("skippedFiles") ? (string)status["skippedFiles"] : null;
+                        statusJson = string.Format("{{\"tableCount\":{0},\"lastIndexed\":{1},\"skippedFileCount\":{2},\"skippedFiles\":{3}}}",
+                            tCount,
+                            lastIdx != null ? "\"" + EscJson(lastIdx) + "\"" : "null",
+                            skippedFileCount,
+                            skippedFiles != null ? "\"" + EscJson(skippedFiles) + "\"" : "null");
                     }
 
                     // Send back to UI on UI thread
@@ -1561,6 +1583,16 @@ namespace ClarionAssistant
                             tab.SchemaSourcesView.SendBrowseResult(dlg.FileName, editId);
                     }
                 }
+                else if (type == "tps")
+                {
+                    using (var dlg = new FolderBrowserDialog())
+                    {
+                        dlg.Description = "Select TPS Folder";
+                        dlg.ShowNewFolderButton = false;
+                        if (dlg.ShowDialog() == DialogResult.OK && tab.SchemaSourcesView != null)
+                            tab.SchemaSourcesView.SendBrowseResult(dlg.SelectedPath, editId);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -1627,6 +1659,161 @@ namespace ClarionAssistant
                     }
                     catch (ObjectDisposedException) { }
                     catch (InvalidOperationException) { }
+                }
+            });
+        }
+
+        private void HandleLaunchTpsPreviewer(TerminalTab tab, string sourceId)
+        {
+            try
+            {
+                var source = Services.SchemaGraphService.GetSource(sourceId);
+                if (source == null)
+                    throw new InvalidOperationException("Source not found: " + sourceId);
+
+                string type = source.ContainsKey("type") ? (string)source["type"] : "";
+                if (!string.Equals(type, "tps", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Standalone previewer is only available for TPS Folder sources.");
+
+                string connInfo = source.ContainsKey("connectionInfo") ? (string)source["connectionInfo"] : "{}";
+                string folderPath = ExtractJsonField(connInfo, "folderPath");
+                if (string.IsNullOrEmpty(folderPath))
+                    throw new InvalidOperationException("TPS folder path is missing for this source.");
+                if (!Directory.Exists(folderPath))
+                    throw new DirectoryNotFoundException("TPS folder not found: " + folderPath);
+
+                string previewerPath = ResolveTpsPreviewerPath();
+                if (!File.Exists(previewerPath))
+                    throw new FileNotFoundException("TpsPreviewer.exe was not found. Run deploy again to copy the standalone previewer.", previewerPath);
+
+                var psi = new ProcessStartInfo(previewerPath)
+                {
+                    WorkingDirectory = Path.GetDirectoryName(previewerPath),
+                    UseShellExecute = true,
+                    Arguments = "\"" + folderPath + "\""
+                };
+                Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                if (tab.SchemaSourcesView != null)
+                {
+                    tab.SchemaSourcesView.SendMessage(
+                        "{\"type\":\"previewerLaunchError\",\"message\":\"" + EscJson(ex.Message) + "\"}");
+                }
+            }
+        }
+
+        private static string ResolveTpsPreviewerPath()
+        {
+            string assemblyDir = Path.GetDirectoryName(typeof(ClaudeChatControl).Assembly.Location);
+            string[] candidates = new[]
+            {
+                Path.Combine(assemblyDir, "TpsPreviewer.exe"),
+                Path.Combine(assemblyDir, "tools", "TpsPreviewer", "TpsPreviewer.exe"),
+                Path.GetFullPath(Path.Combine(assemblyDir, "..", "..", "..", "TpsPreviewer", "bin", "Debug", "net48", "TpsPreviewer.exe"))
+            };
+
+            foreach (string candidate in candidates)
+            {
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+
+            return candidates[0];
+        }
+
+        private void HandleGetTpsPreviewTables(TerminalTab tab, string sourceId)
+        {
+            try
+            {
+                var source = Services.SchemaGraphService.GetSource(sourceId);
+                if (source == null)
+                    throw new InvalidOperationException("Source not found: " + sourceId);
+
+                string type = source.ContainsKey("type") ? (string)source["type"] : "";
+                string connInfo = source.ContainsKey("connectionInfo") ? (string)source["connectionInfo"] : "{}";
+                var tables = Services.SchemaGraphService.GetTpsPreviewTables(sourceId, type, connInfo);
+                var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+                string tablesJson = serializer.Serialize(tables);
+
+                if (tab.SchemaSourcesView != null)
+                {
+                    tab.SchemaSourcesView.SendMessage(
+                        "{\"type\":\"setTpsPreviewTables\",\"sourceId\":\"" + EscJson(sourceId) +
+                        "\",\"tables\":" + tablesJson + "}");
+                }
+            }
+            catch (Exception ex)
+            {
+                if (tab.SchemaSourcesView != null)
+                {
+                    tab.SchemaSourcesView.SendMessage(
+                        "{\"type\":\"setTpsPreviewError\",\"message\":\"" + EscJson(ex.Message) + "\"}");
+                }
+            }
+        }
+
+        private void HandlePreviewTpsRows(TerminalTab tab, string data)
+        {
+            string sourceId = ExtractJsonField(data, "sourceId");
+            string tableGuid = ExtractJsonField(data, "tableGuid");
+            int limit;
+            if (!int.TryParse(ExtractJsonField(data, "limit"), out limit))
+                limit = 10;
+
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    var source = Services.SchemaGraphService.GetSource(sourceId);
+                    if (source == null)
+                        throw new InvalidOperationException("Source not found: " + sourceId);
+
+                    string type = source.ContainsKey("type") ? (string)source["type"] : "";
+                    string connInfo = source.ContainsKey("connectionInfo") ? (string)source["connectionInfo"] : "{}";
+                    var result = Services.SchemaGraphService.PreviewTpsRows(sourceId, type, connInfo, tableGuid, limit);
+                    var serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+                    string resultJson = serializer.Serialize(result);
+
+                    if (!IsDisposed && tab.SchemaSourcesView != null)
+                    {
+                        string sid = sourceId;
+                        string tGuid = tableGuid;
+                        try
+                        {
+                            BeginInvoke(new Action(() =>
+                            {
+                                if (tab.SchemaSourcesView != null)
+                                {
+                                    tab.SchemaSourcesView.SendMessage(
+                                        "{\"type\":\"setTpsPreviewRows\",\"sourceId\":\"" + EscJson(sid) +
+                                        "\",\"tableGuid\":\"" + EscJson(tGuid) +
+                                        "\",\"result\":" + resultJson + "}");
+                                }
+                            }));
+                        }
+                        catch (ObjectDisposedException) { }
+                        catch (InvalidOperationException) { }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (!IsDisposed && tab.SchemaSourcesView != null)
+                    {
+                        string message = ex.Message;
+                        try
+                        {
+                            BeginInvoke(new Action(() =>
+                            {
+                                if (tab.SchemaSourcesView != null)
+                                    tab.SchemaSourcesView.SendMessage(
+                                        "{\"type\":\"setTpsPreviewError\",\"message\":\"" + EscJson(message) + "\"}");
+                            }));
+                        }
+                        catch (ObjectDisposedException) { }
+                        catch (InvalidOperationException) { }
+                    }
                 }
             });
         }

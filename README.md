@@ -30,7 +30,8 @@ Ask it to write Clarion code, explain procedures, refactor classes, build COM co
 - **Language Server (LSP)** &mdash; real-time code intelligence with go-to-definition, find references, hover info, diagnostics, and rename support
 - **CodeGraph** &mdash; solution-wide code intelligence via SQL queries over every symbol, relationship, and call chain
 - **DocGraph** &mdash; instant search across 14,000+ indexed documentation chunks (Clarion core, CapeSoft, Icetips, and more)
-- **SchemaGraph** &mdash; database schema intelligence from Clarion dictionaries, SQL Server, SQLite, and PostgreSQL
+- **SchemaGraph** &mdash; database schema intelligence from Clarion dictionaries, TPS folders, SQL Server, SQLite, and PostgreSQL
+- **TPS data access (spike)** &mdash; experimental read-only MCP tools for listing TPS tables, describing fields, and sampling rows
 - **Source Control** &mdash; GitHub and Bitbucket integration with per-solution repo linking
 - **Build tools** &mdash; build solutions, individual apps, or C# COM controls without leaving the chat
 - **Class intelligence** &mdash; parse CLASS definitions, sync .inc/.clw, generate method stubs
@@ -243,7 +244,7 @@ Settings → MCP Server panel and the new sidebar entry are part of the standard
 
 ### Schema Sources &mdash; Database Intelligence
 - **Schema Source Manager** &mdash; collapsible "Solution Settings" panel above the terminal with per-solution database source linking
-- **Multi-database support** &mdash; index schemas from Clarion dictionaries (.dctx), SQL Server, SQLite, and PostgreSQL
+- **Multi-database support** &mdash; index schemas from Clarion dictionaries (.dctx), TPS folders, SQL Server, SQLite, and PostgreSQL
 - **Global source registry** &mdash; define database sources once, link to multiple solutions
 - **DPAPI-encrypted credentials** &mdash; connection info stored securely with Windows data protection
 - **Test Connection** &mdash; validate database connections before indexing
@@ -427,6 +428,21 @@ Clarion Assistant exposes **108 MCP tools** that Claude uses to interact with th
 | `ingest_sql_database` | Index schema from SQL Server, SQLite, or PostgreSQL |
 | `export_dctx` | Export dictionary to .dctx format |
 | `import_dctx` | Import a .dctx dictionary |
+
+### TPS Data (3 tools)
+| Tool | Description |
+|---|---|
+| `list_tps_tables` | List tables found in a Clarion TPS file |
+| `describe_tps_table` | Show fields and memo/blob definitions for one TPS table |
+| `read_tps_rows` | Read the first N rows from a TPS table |
+
+Schema Sources now also supports adding a **TPS Folder** source that recursively indexes all `.tps` files under a selected directory into SchemaGraph for `search_tables`, `get_table`, and related schema queries.
+
+The solution also includes a standalone **`TpsPreviewer`** WinForms app for browsing TPS folders and previewing rows outside the Clarion Assistant host.
+
+- the **Preview** button in Schema Sources launches the standalone viewer for indexed TPS Folder sources
+- the standalone viewer supports table filtering, free-text row filtering, and sortable preview columns
+- TPS text decoding is forced to **Windows-1250** in the shared `TpsService`, so Croatian/Central European diacritics render correctly in both the addin and the standalone viewer
 
 ### Documentation Search (6 tools)
 | Tool | Description |

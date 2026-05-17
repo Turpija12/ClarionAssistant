@@ -1,0 +1,30 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClarionAssistant", "ClarionAssistant\ClarionAssistant.csproj", "{EA32C2B5-84D8-8442-788A-5C6053F0A4F0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TpsPreviewer", "TpsPreviewer\TpsPreviewer.csproj", "{7F3D15A5-623A-4D95-8E49-C35B3C6A9957}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{EA32C2B5-84D8-8442-788A-5C6053F0A4F0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EA32C2B5-84D8-8442-788A-5C6053F0A4F0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EA32C2B5-84D8-8442-788A-5C6053F0A4F0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EA32C2B5-84D8-8442-788A-5C6053F0A4F0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7F3D15A5-623A-4D95-8E49-C35B3C6A9957}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7F3D15A5-623A-4D95-8E49-C35B3C6A9957}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7F3D15A5-623A-4D95-8E49-C35B3C6A9957}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7F3D15A5-623A-4D95-8E49-C35B3C6A9957}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {306FEC61-14EC-481B-8B8E-2DCCE8940400}
+	EndGlobalSection
+EndGlobal
