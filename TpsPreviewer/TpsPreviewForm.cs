@@ -18,6 +18,7 @@ namespace TpsPreviewer
         private readonly TextBox _folderPathTextBox;
         private readonly Button _browseButton;
         private readonly CheckBox _recursiveCheckBox;
+        private readonly ComboBox _encodingComboBox;
         private readonly Button _loadButton;
         private readonly ComboBox _tableComboBox;
         private readonly TextBox _tableFilterTextBox;
@@ -61,23 +62,38 @@ namespace TpsPreviewer
             var folderPanel = new TableLayoutPanel
             {
                 Dock = DockStyle.Top,
-                ColumnCount = 4,
+                ColumnCount = 6,
                 AutoSize = true
             };
             folderPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             folderPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             folderPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             folderPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            folderPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220f));
+            folderPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
             _folderPathTextBox = new TextBox { Dock = DockStyle.Fill };
             _browseButton = new Button { Text = "Browse...", AutoSize = true };
             _recursiveCheckBox = new CheckBox { Text = "Recursive", Checked = true, AutoSize = true, Margin = new Padding(12, 6, 12, 0) };
+            _encodingComboBox = new ComboBox
+            {
+                Dock = DockStyle.Fill,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
             _loadButton = new Button { Text = "Load Tables", AutoSize = true };
+
+            _encodingComboBox.DataSource = BuildEncodingOptions();
+            _encodingComboBox.DisplayMember = "DisplayName";
+            _encodingComboBox.ValueMember = "EncodingName";
+            _encodingComboBox.SelectedValue = "windows-1250";
+            _catalog.TextEncodingName = GetSelectedEncodingName();
 
             folderPanel.Controls.Add(_folderPathTextBox, 0, 0);
             folderPanel.Controls.Add(_browseButton, 1, 0);
             folderPanel.Controls.Add(_recursiveCheckBox, 2, 0);
-            folderPanel.Controls.Add(_loadButton, 3, 0);
+            folderPanel.Controls.Add(new Label { Text = "Encoding:", TextAlign = ContentAlignment.MiddleLeft, Dock = DockStyle.Fill, Margin = new Padding(0, 6, 8, 0) }, 3, 0);
+            folderPanel.Controls.Add(_encodingComboBox, 4, 0);
+            folderPanel.Controls.Add(_loadButton, 5, 0);
             root.Controls.Add(folderPanel, 0, 0);
 
             var previewPanel = new TableLayoutPanel
@@ -155,7 +171,10 @@ namespace TpsPreviewer
             {
                 Dock = DockStyle.Fill,
                 Orientation = Orientation.Horizontal,
-                SplitterDistance = 460
+                FixedPanel = FixedPanel.Panel2,
+                Panel2MinSize = 72,
+                SplitterDistance = 600,
+                SplitterWidth = 5
             };
             root.Controls.Add(split, 0, 2);
             root.SetRowSpan(split, 2);
@@ -194,6 +213,7 @@ namespace TpsPreviewer
             _browseButton.Click += OnBrowseClick;
             _loadButton.Click += OnLoadClick;
             _previewButton.Click += OnPreviewClick;
+            _encodingComboBox.SelectedIndexChanged += OnEncodingChanged;
             _tableFilterTextBox.TextChanged += OnTableFilterChanged;
             _rowFilterTextBox.TextChanged += OnRowFilterChanged;
             _grid.Sorted += OnGridSorted;
@@ -224,6 +244,14 @@ namespace TpsPreviewer
         private void OnTableFilterChanged(object sender, EventArgs e)
         {
             ApplyTableFilter();
+        }
+
+        private void OnEncodingChanged(object sender, EventArgs e)
+        {
+            _catalog.TextEncodingName = GetSelectedEncodingName();
+
+            if (_tables.Count > 0 && !string.IsNullOrWhiteSpace(_folderPathTextBox.Text))
+                LoadTables();
         }
 
         private void OnRowFilterChanged(object sender, EventArgs e)
@@ -268,7 +296,7 @@ namespace TpsPreviewer
 
                 _statusLabel.Text = string.Format("{0} tables from {1} files", _tables.Count, result.ReadableFileCount);
                 _metaLabel.Text = _filteredTables.Count > 0
-                    ? "Filter tables, then select one and click Preview Rows. Click column headers to sort loaded rows."
+                    ? "Encoding: " + GetSelectedEncodingDisplayName() + ". Filter tables, then select one and click Preview Rows."
                     : (_tables.Count == 0 ? "No previewable TPS tables were found." : "No tables match the current filter.");
                 _skippedTextBox.Text = result.SkippedFiles.Count == 0
                     ? "(none)"
@@ -352,7 +380,7 @@ namespace TpsPreviewer
 
                 ApplyRowFilter();
 
-                _metaLabel.Text = table.DisplayName + " - " + table.FilePath;
+                _metaLabel.Text = table.DisplayName + " - " + table.FilePath + " (" + GetSelectedEncodingDisplayName() + ")";
             }
             catch (Exception ex)
             {
@@ -612,6 +640,31 @@ namespace TpsPreviewer
             _gridBindingSource.DataSource = null;
         }
 
+        private string GetSelectedEncodingName()
+        {
+            EncodingOption option = _encodingComboBox.SelectedItem as EncodingOption;
+            return option != null ? option.EncodingName : "windows-1250";
+        }
+
+        private string GetSelectedEncodingDisplayName()
+        {
+            EncodingOption option = _encodingComboBox.SelectedItem as EncodingOption;
+            return option != null ? option.DisplayName : "Windows-1250";
+        }
+
+        private static List<EncodingOption> BuildEncodingOptions()
+        {
+            return new List<EncodingOption>
+            {
+                new EncodingOption("windows-1250", "Windows-1250 (Central Europe / Croatian)"),
+                new EncodingOption("windows-1252", "Windows-1252 (Western Europe)"),
+                new EncodingOption("iso-8859-1", "ISO-8859-1 (Latin-1)"),
+                new EncodingOption("ibm852", "IBM852 (DOS Central Europe)"),
+                new EncodingOption("ibm437", "IBM437 (DOS US)"),
+                new EncodingOption("utf-8", "UTF-8")
+            };
+        }
+
         private static bool ContainsIgnoreCase(string value, string search)
         {
             if (string.IsNullOrEmpty(search))
@@ -635,6 +688,18 @@ namespace TpsPreviewer
             String,
             Numeric,
             Boolean
+        }
+
+        private sealed class EncodingOption
+        {
+            public EncodingOption(string encodingName, string displayName)
+            {
+                EncodingName = encodingName;
+                DisplayName = displayName;
+            }
+
+            public string EncodingName { get; private set; }
+            public string DisplayName { get; private set; }
         }
     }
 }

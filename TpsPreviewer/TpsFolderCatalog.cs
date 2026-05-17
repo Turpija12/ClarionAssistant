@@ -7,7 +7,7 @@ namespace TpsPreviewer
 {
     public sealed class TpsFolderCatalog
     {
-        private readonly TpsService _tpsService = new TpsService();
+        public string TextEncodingName { get; set; }
 
         public FolderLoadResult LoadFolder(string folderPath, bool recursive)
         {
@@ -25,7 +25,8 @@ namespace TpsPreviewer
             {
                 try
                 {
-                    var tables = _tpsService.ListTables(filePath);
+                    var tpsService = CreateTpsService();
+                    var tables = tpsService.ListTables(filePath);
                     if (tables == null || tables.Count == 0)
                     {
                         result.SkippedFiles.Add(Path.GetFileName(filePath) + " (no tables found)");
@@ -66,11 +67,16 @@ namespace TpsPreviewer
             if (table == null)
                 throw new ArgumentNullException("table");
 
-            var preview = _tpsService.ReadRows(table.FilePath, table.TableNumber.ToString(), limit);
+            var preview = CreateTpsService().ReadRows(table.FilePath, table.TableNumber.ToString(), limit);
             preview["displayName"] = table.DisplayName;
             preview["relativePath"] = table.RelativePath;
             preview["sourceFile"] = table.FilePath;
             return preview;
+        }
+
+        private TpsService CreateTpsService()
+        {
+            return new TpsService(TextEncodingName);
         }
 
         private static string BuildDisplayName(string relativePath, string rawName, int tableNumber)

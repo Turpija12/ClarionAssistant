@@ -53,7 +53,7 @@ Clarion Assistant now has a practical TPS workflow that works both inside the ID
 - **Read-only TPS MCP tools** &mdash; new TPS tools let the assistant list tables, describe fields, and sample rows directly from Clarion TPS files.
 - **Preview from Schema Sources** &mdash; indexed TPS Folder sources now expose a **Preview** action.
 - **Standalone `TpsPreviewer` app** &mdash; the Preview action launches a native WinForms TPS viewer outside the IDE, and the solution now includes that standalone project.
-- **Filtering and sorting** &mdash; the standalone previewer supports table filtering, free-text row filtering, and sortable preview columns.
+- **Filtering, sorting, and encoding selection** &mdash; the standalone previewer supports table filtering, free-text row filtering, sortable preview columns, and a selectable TPS text encoding dropdown.
 - **Croatian/Central European text fix** &mdash; shared TPS decoding now uses **Windows-1250**, so diacritics such as `č`, `ć`, `ž`, `š`, and `đ` render correctly in both the addin and the standalone viewer.
 
 ---
@@ -456,7 +456,7 @@ Schema Sources now also supports adding a **TPS Folder** source that recursively
 The solution also includes a standalone **`TpsPreviewer`** WinForms app for browsing TPS folders and previewing rows outside the Clarion Assistant host.
 
 - the **Preview** button in Schema Sources launches the standalone viewer for indexed TPS Folder sources
-- the standalone viewer supports table filtering, free-text row filtering, and sortable preview columns
+- the standalone viewer supports table filtering, free-text row filtering, sortable preview columns, and a selectable text-encoding dropdown
 - TPS text decoding is forced to **Windows-1250** in the shared `TpsService`, so Croatian/Central European diacritics render correctly in both the addin and the standalone viewer
 
 ### Documentation Search (6 tools)

@@ -15,6 +15,18 @@ namespace ClarionAssistant.Services
     /// </summary>
     public sealed class TpsService
     {
+        private readonly Encoding _textEncoding;
+
+        public TpsService()
+            : this(null)
+        {
+        }
+
+        public TpsService(string textEncodingName)
+        {
+            _textEncoding = ResolveTpsEncoding(textEncodingName);
+        }
+
         public List<Dictionary<string, object>> ListTables(string tpsPath, string password = null)
         {
             using (var parser = CreateParser(tpsPath, password))
@@ -163,7 +175,7 @@ namespace ClarionAssistant.Services
             }
         }
 
-        private static global::TpsParser.TpsParser CreateParser(string tpsPath, string password)
+        private global::TpsParser.TpsParser CreateParser(string tpsPath, string password)
         {
             if (string.IsNullOrEmpty(tpsPath))
                 throw new ArgumentException("TPS file path is required.", "tpsPath");
@@ -178,12 +190,28 @@ namespace ClarionAssistant.Services
             // TpsParser defaults to ISO-8859-1, but Clarion TPS data on Croatian/Central European
             // installs is typically stored in Windows-1250. Override the parser default so shared
             // TPS consumers show native diacritics correctly.
-            parser.TpsFile.Encoding = ResolveTpsEncoding();
+            parser.TpsFile.Encoding = _textEncoding;
             return parser;
         }
 
-        private static Encoding ResolveTpsEncoding()
+        private static Encoding ResolveTpsEncoding(string textEncodingName)
         {
+            if (!string.IsNullOrWhiteSpace(textEncodingName))
+            {
+                try
+                {
+                    int codePage;
+                    if (int.TryParse(textEncodingName, NumberStyles.Integer, CultureInfo.InvariantCulture, out codePage))
+                        return Encoding.GetEncoding(codePage);
+
+                    return Encoding.GetEncoding(textEncodingName);
+                }
+                catch (ArgumentException ex)
+                {
+                    throw new ArgumentException("Unknown TPS text encoding: " + textEncodingName, "textEncodingName", ex);
+                }
+            }
+
             try
             {
                 return Encoding.GetEncoding(1250);
