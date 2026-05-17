@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>TpsPreviewer</RootNamespace>
+    <AssemblyName>TpsPreviewer</AssemblyName>
+    <PlatformTarget>x86</PlatformTarget>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\ClarionAssistant\Services\TpsService.cs" Link="Services\TpsService.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TpsParser" Version="5.0.0" />
+  </ItemGroup>
+</Project>

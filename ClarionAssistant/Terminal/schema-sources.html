@@ -80,11 +80,13 @@ body {
 .type-badge.mssql { background: #89b4fa; color: #1e1e2e; }
 .type-badge.sqlite { background: #f9e2af; color: #1e1e2e; }
 .type-badge.postgres { background: #cba6f7; color: #1e1e2e; }
+.type-badge.tps { background: #fab387; color: #1e1e2e; }
 
 .status-text { font-size: 11px; }
 .status-text.pending { color: #6c7086; }
 .status-text.indexed { color: #a6e3a1; }
 .status-text.indexing { color: #f9e2af; }
+.status-text.warning { color: #f9e2af; }
 .status-text.error { color: #f38ba8; }
 
 .btn-index {
@@ -175,6 +177,97 @@ body {
     gap: 8px;
 }
 
+.preview-toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: end;
+    margin-bottom: 10px;
+}
+
+.preview-toolbar .form-row {
+    margin-bottom: 0;
+    flex: 1;
+}
+
+.preview-grid-wrap {
+    border: 1px solid #313244;
+    border-radius: 6px;
+    overflow: auto;
+    max-height: 320px;
+}
+
+.preview-grid {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    table-layout: fixed;
+}
+
+.preview-grid th,
+.preview-grid td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #1e1e2e;
+    text-align: left;
+    vertical-align: top;
+    white-space: nowrap;
+}
+
+.preview-grid th {
+    position: sticky;
+    top: 0;
+    background: #181825;
+    color: #a6adc8;
+    z-index: 1;
+    user-select: none;
+}
+
+.preview-grid td {
+    max-width: 260px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.preview-grid th .header-label {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-right: 10px;
+}
+
+.preview-grid th .col-resizer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 8px;
+    height: 100%;
+    cursor: col-resize;
+    user-select: none;
+}
+
+.preview-grid th .col-resizer:hover {
+    background: rgba(137, 180, 250, 0.25);
+}
+
+.preview-meta {
+    font-size: 11px;
+    color: #6c7086;
+    margin-bottom: 8px;
+}
+
+.preview-dialog {
+    position: absolute;
+    width: 900px;
+    max-width: calc(100vw - 32px);
+}
+
+.preview-header {
+    cursor: move;
+}
+
+.preview-header .close-btn {
+    cursor: pointer;
+}
+
 /* ── Global source list in modal ── */
 .global-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
 .global-table th {
@@ -234,6 +327,10 @@ body.light .empty-msg { color: #7c7f93; }
 body.light .modal { background: #eff1f5; border-color: #bcc0cc; }
 body.light .modal-header { border-bottom-color: #ccd0da; }
 body.light .modal-footer { border-top-color: #ccd0da; }
+body.light .preview-grid-wrap { border-color: #ccd0da; }
+body.light .preview-grid th { background: #e6e9ef; color: #5c5f77; }
+body.light .preview-grid td { border-bottom-color: #eff1f5; }
+body.light .preview-grid th .col-resizer:hover { background: rgba(30, 102, 245, 0.18); }
 body.light .global-table th { color: #7c7f93; border-bottom-color: #ccd0da; }
 body.light .global-table td { border-bottom-color: #eff1f5; }
 body.light .global-table tr:hover td { background: #e6e9ef; }
@@ -249,6 +346,7 @@ body.light .repo-field { background: #e6e9ef; border-color: #bcc0cc; color: #4c4
 body.light .status-text.pending { color: #7c7f93; }
 body.light .status-text.indexed { color: #40a02b; }
 body.light .status-text.indexing { color: #df8e1d; }
+body.light .status-text.warning { color: #df8e1d; }
 body.light .status-text.error { color: #d20f39; }
 </style>
 </head>
@@ -341,6 +439,7 @@ body.light .status-text.error { color: #d20f39; }
                     <label>Source Type</label>
                     <select id="formType" onchange="onTypeChange()">
                         <option value="dctx">Clarion Dictionary (.dctx)</option>
+                        <option value="tps">TPS Folder</option>
                         <option value="mssql">Microsoft SQL Server</option>
                         <option value="sqlite">SQLite</option>
                         <option value="postgres">PostgreSQL</option>
@@ -350,13 +449,16 @@ body.light .status-text.error { color: #d20f39; }
                     <label>Display Name</label>
                     <input type="text" id="formName" placeholder="e.g. POS Dictionary">
                 </div>
-                <!-- DCTX / SQLite fields -->
+                <!-- DCTX / SQLite / TPS fields -->
                 <div class="form-row" id="fieldFilePath">
-                    <label>File Path</label>
+                    <label id="labelFilePath">File Path</label>
                     <div class="browse-row">
                         <input type="text" id="formFilePath" placeholder="C:\path\to\file">
-                        <button class="btn-sm" onclick="browseFile()">Browse</button>
+                        <button class="btn-sm" id="btnBrowsePath" onclick="browseFile()">Browse</button>
                     </div>
+                </div>
+                <div class="form-row" id="fieldTpsHint" style="display:none">
+                    <span class="status-text">Indexes all <code>*.tps</code> files recursively under the selected folder.</span>
                 </div>
                 <!-- MSSQL / Postgres fields -->
                 <div class="form-row" id="fieldServer" style="display:none">
@@ -396,16 +498,110 @@ body.light .status-text.error { color: #d20f39; }
     </div>
 </div>
 
+<!-- TPS Preview Modal -->
+<div class="modal-overlay" id="previewModal">
+    <div class="modal preview-dialog" id="previewDialog">
+        <div class="modal-header preview-header" id="previewHeader">
+            TPS Preview Rows
+            <button class="close-btn" onclick="closePreviewModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="preview-toolbar">
+                <div class="form-row">
+                    <label>Table</label>
+                    <select id="previewTableSelect" onchange="onPreviewTableChanged()"></select>
+                </div>
+                <div class="form-row" style="width:110px;flex:0 0 110px">
+                    <label>Rows</label>
+                    <input type="text" id="previewLimit" value="10">
+                </div>
+                <button class="btn-sm primary" id="btnPreviewLoad" onclick="loadPreviewRows()">Load</button>
+            </div>
+            <div class="preview-meta" id="previewMeta"></div>
+            <div class="status-text" id="previewStatus" style="margin-bottom:8px"></div>
+            <div class="preview-grid-wrap">
+                <div id="previewGridContainer" class="empty-msg" style="display:block">Choose a TPS table to preview rows.</div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn-sm" onclick="closePreviewModal()">Close</button>
+        </div>
+    </div>
+</div>
+
 <script>
 var sources = [];
 var globalSources = [];
 var linkedIds = [];
 var collapsed = true;
 var currentTab = 'schema';
+var previewSourceId = '';
+var previewTables = [];
+var previewColumnWidthsByTable = {};
+var previewModalPosition = null;
+var previewDragState = null;
+var previewResizeState = null;
 
 function send(action, data) {
     if (window.chrome && window.chrome.webview)
         window.chrome.webview.postMessage(JSON.stringify({ action: action, data: data || '' }));
+}
+
+function getSourceTypeLabel(type) {
+    if (type === 'dctx') return 'DCTX';
+    if (type === 'tps') return 'TPS Folder';
+    if (type === 'mssql') return 'MSSQL';
+    if (type === 'sqlite') return 'SQLite';
+    if (type === 'postgres') return 'PostgreSQL';
+    return type || '';
+}
+
+function getPathFieldConfig(type) {
+    if (type === 'tps') {
+        return {
+            label: 'Folder Path',
+            placeholder: 'C:\\path\\to\\folder',
+            buttonText: 'Browse Folder'
+        };
+    }
+
+    return {
+        label: 'File Path',
+        placeholder: 'C:\\path\\to\\file',
+        buttonText: 'Browse'
+    };
+}
+
+function getStatusText(source) {
+    if (!source || !source.indexed)
+        return 'not indexed';
+
+    var text = (source.tableCount || 0) + ' tables';
+    if (source.skippedFileCount && source.skippedFileCount > 0)
+        text += ', ' + source.skippedFileCount + ' skipped';
+    return text;
+}
+
+function getStatusClass(source) {
+    if (!source || !source.indexed)
+        return 'pending';
+    if (source.skippedFileCount && source.skippedFileCount > 0)
+        return 'warning';
+    return 'indexed';
+}
+
+function getStatusTitle(source) {
+    if (!source || !source.skippedFiles)
+        return '';
+    return source.skippedFiles;
+}
+
+function canPreviewSource(source) {
+    return source && source.type === 'tps' && source.indexed;
+}
+
+function launchPreviewer(sourceId) {
+    send('launchTpsPreviewer', sourceId);
 }
 
 // ── Tabs ──
@@ -463,18 +659,22 @@ function renderSources() {
     var html = '';
     for (var i = 0; i < sources.length; i++) {
         var s = sources[i];
-        var statusClass = s.indexed ? 'indexed' : 'pending';
-        var statusText = s.indexed
-            ? s.tableCount + ' tables'
-            : 'not indexed';
+        var statusClass = getStatusClass(s);
+        var statusText = getStatusText(s);
+        var statusTitle = getStatusTitle(s);
         var lastIndexed = s.lastIndexed ? formatDate(s.lastIndexed) : '\u2014';
 
         html += '<tr data-id="' + esc(s.id) + '">'
             + '<td>' + esc(s.name) + '</td>'
-            + '<td><span class="type-badge ' + s.type + '">' + s.type + '</span></td>'
-            + '<td><span class="status-text ' + statusClass + '" id="status-' + s.id + '">' + statusText + '</span></td>'
+            + '<td><span class="type-badge ' + s.type + '">' + esc(getSourceTypeLabel(s.type)) + '</span></td>'
+            + '<td><span class="status-text ' + statusClass + '" id="status-' + s.id + '" title="' + esc(statusTitle) + '">' + statusText + '</span></td>'
             + '<td><span id="date-' + s.id + '">' + lastIndexed + '</span></td>'
-            + '<td><button class="btn-index" id="idx-' + s.id + '" onclick="indexSource(\'' + esc(s.id) + '\')">Index</button></td>'
+            + '<td>'
+            + (canPreviewSource(s)
+                ? '<button class="btn-index" style="margin-right:4px" onclick="launchPreviewer(\'' + esc(s.id) + '\')">Preview</button>'
+                : '')
+            + '<button class="btn-index" id="idx-' + s.id + '" onclick="indexSource(\'' + esc(s.id) + '\')">Index</button>'
+            + '</td>'
             + '</tr>';
     }
     tbody.innerHTML = html;
@@ -492,6 +692,221 @@ function indexAll() {
     for (var i = 0; i < sources.length; i++) {
         indexSource(sources[i].id);
     }
+}
+
+function openPreviewModal(sourceId) {
+    previewSourceId = sourceId;
+    previewTables = [];
+    document.getElementById('previewTableSelect').innerHTML = '';
+    document.getElementById('previewStatus').className = 'status-text indexing';
+    document.getElementById('previewStatus').textContent = 'Loading table list...';
+    document.getElementById('previewMeta').textContent = '';
+    document.getElementById('previewGridContainer').className = 'empty-msg';
+    document.getElementById('previewGridContainer').textContent = 'Choose a TPS table to preview rows.';
+    document.getElementById('previewModal').classList.add('visible');
+    resetPreviewDialogPosition();
+    send('modalOpened');
+    send('getTpsPreviewTables', sourceId);
+}
+
+function closePreviewModal() {
+    document.getElementById('previewModal').classList.remove('visible');
+    document.getElementById('previewStatus').textContent = '';
+    previewTables = [];
+    previewSourceId = '';
+    send('modalClosed');
+}
+
+function renderPreviewTableOptions() {
+    var sel = document.getElementById('previewTableSelect');
+    var html = '';
+    for (var i = 0; i < previewTables.length; i++) {
+        var t = previewTables[i];
+        var label = t.name;
+        if (t.sourceFileName) label += ' [' + t.sourceFileName + ']';
+        html += '<option value="' + esc(t.guid) + '">' + esc(label) + '</option>';
+    }
+    sel.innerHTML = html;
+}
+
+function onPreviewTableChanged() {
+    document.getElementById('previewStatus').textContent = '';
+    document.getElementById('previewMeta').textContent = '';
+    document.getElementById('previewGridContainer').className = 'empty-msg';
+    document.getElementById('previewGridContainer').textContent = 'Click Load to fetch rows.';
+}
+
+function loadPreviewRows() {
+    var sel = document.getElementById('previewTableSelect');
+    if (!sel.value) return;
+
+    var limit = parseInt(document.getElementById('previewLimit').value, 10);
+    if (!limit || limit < 1) limit = 10;
+
+    document.getElementById('btnPreviewLoad').disabled = true;
+    document.getElementById('btnPreviewLoad').textContent = 'Loading...';
+    document.getElementById('previewStatus').className = 'status-text indexing';
+    document.getElementById('previewStatus').textContent = 'Loading rows...';
+
+    send('previewTpsRows', JSON.stringify({ sourceId: previewSourceId, tableGuid: sel.value, limit: limit }));
+}
+
+function renderPreviewRows(result) {
+    var rows = result && result.rows ? result.rows : [];
+    var container = document.getElementById('previewGridContainer');
+    var tableGuid = result && result.tableGuid ? result.tableGuid : '';
+    if (!rows.length) {
+        container.className = 'empty-msg';
+        container.textContent = 'No rows returned.';
+        return;
+    }
+
+    var columns = [];
+    for (var i = 0; i < rows.length; i++) {
+        for (var key in rows[i]) {
+            if (rows[i].hasOwnProperty(key) && columns.indexOf(key) < 0)
+                columns.push(key);
+        }
+    }
+
+    var widthMap = previewColumnWidthsByTable[tableGuid] || {};
+    var html = '<table class="preview-grid" id="previewGrid"><colgroup>';
+    for (var cg = 0; cg < columns.length; cg++) {
+        var width = widthMap[columns[cg]] || getDefaultPreviewColumnWidth(columns[cg]);
+        html += '<col style="width:' + width + 'px">';
+    }
+    html += '</colgroup><thead><tr>';
+    for (var c = 0; c < columns.length; c++)
+        html += '<th data-col-index="' + c + '" data-col-name="' + esc(columns[c]) + '"><span class="header-label">' + esc(columns[c]) + '</span><span class="col-resizer" data-col-index="' + c + '"></span></th>';
+    html += '</tr></thead><tbody>';
+
+    for (var r = 0; r < rows.length; r++) {
+        html += '<tr>';
+        for (var c2 = 0; c2 < columns.length; c2++) {
+            var value = rows[r][columns[c2]];
+            if (value === null || value === undefined) value = '';
+            else if (typeof value === 'object') value = JSON.stringify(value);
+            else value = String(value);
+            html += '<td>' + esc(value) + '</td>';
+        }
+        html += '</tr>';
+    }
+
+    html += '</tbody></table>';
+    container.className = '';
+    container.innerHTML = html;
+    attachPreviewColumnResizers(tableGuid);
+}
+
+function getDefaultPreviewColumnWidth(columnName) {
+    if (columnName === '__recordNumber') return 110;
+    return 180;
+}
+
+function attachPreviewColumnResizers(tableGuid) {
+    var grid = document.getElementById('previewGrid');
+    if (!grid) return;
+
+    var handles = grid.querySelectorAll('.col-resizer');
+    for (var i = 0; i < handles.length; i++) {
+        handles[i].addEventListener('mousedown', function(ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+
+            var colIndex = parseInt(this.getAttribute('data-col-index'), 10);
+            var col = grid.querySelectorAll('col')[colIndex];
+            if (!col) return;
+
+            previewResizeState = {
+                tableGuid: tableGuid,
+                columnName: grid.querySelectorAll('th')[colIndex].getAttribute('data-col-name'),
+                col: col,
+                startX: ev.clientX,
+                startWidth: col.getBoundingClientRect().width
+            };
+        });
+    }
+}
+
+function resetPreviewDialogPosition() {
+    var dialog = document.getElementById('previewDialog');
+    var overlay = document.getElementById('previewModal');
+    if (!dialog || !overlay) return;
+
+    var overlayRect = overlay.getBoundingClientRect();
+    var left = Math.max(16, Math.round((overlayRect.width - dialog.offsetWidth) / 2));
+    var top = 20;
+
+    if (previewModalPosition) {
+        left = previewModalPosition.left;
+        top = previewModalPosition.top;
+    }
+
+    dialog.style.left = left + 'px';
+    dialog.style.top = top + 'px';
+}
+
+function clampPreviewDialogPosition(left, top) {
+    var dialog = document.getElementById('previewDialog');
+    var overlay = document.getElementById('previewModal');
+    if (!dialog || !overlay) return { left: left, top: top };
+
+    var overlayRect = overlay.getBoundingClientRect();
+    var dialogWidth = dialog.offsetWidth;
+    var dialogHeight = dialog.offsetHeight;
+    var maxLeft = Math.max(16, overlayRect.width - dialogWidth - 16);
+    var maxTop = Math.max(16, overlayRect.height - dialogHeight - 16);
+
+    return {
+        left: Math.min(Math.max(16, left), maxLeft),
+        top: Math.min(Math.max(16, top), maxTop)
+    };
+}
+
+function initPreviewDragging() {
+    var header = document.getElementById('previewHeader');
+    if (!header) return;
+
+    header.addEventListener('mousedown', function(ev) {
+        if (ev.target && ev.target.classList && ev.target.classList.contains('close-btn')) return;
+
+        var dialog = document.getElementById('previewDialog');
+        if (!dialog) return;
+
+        previewDragState = {
+            offsetX: ev.clientX - dialog.offsetLeft,
+            offsetY: ev.clientY - dialog.offsetTop
+        };
+        ev.preventDefault();
+    });
+
+    document.addEventListener('mousemove', function(ev) {
+        if (previewResizeState) {
+            var nextWidth = Math.max(80, previewResizeState.startWidth + (ev.clientX - previewResizeState.startX));
+            previewResizeState.col.style.width = nextWidth + 'px';
+            if (!previewColumnWidthsByTable[previewResizeState.tableGuid])
+                previewColumnWidthsByTable[previewResizeState.tableGuid] = {};
+            previewColumnWidthsByTable[previewResizeState.tableGuid][previewResizeState.columnName] = nextWidth;
+            ev.preventDefault();
+            return;
+        }
+
+        if (!previewDragState) return;
+
+        var pos = clampPreviewDialogPosition(ev.clientX - previewDragState.offsetX, ev.clientY - previewDragState.offsetY);
+        var dialog = document.getElementById('previewDialog');
+        if (!dialog) return;
+
+        dialog.style.left = pos.left + 'px';
+        dialog.style.top = pos.top + 'px';
+        previewModalPosition = pos;
+        ev.preventDefault();
+    });
+
+    document.addEventListener('mouseup', function() {
+        previewDragState = null;
+        previewResizeState = null;
+    });
 }
 
 // ── Manage Sources Modal ──
@@ -517,7 +932,7 @@ function renderGlobalSources() {
         html += '<tr>'
             + '<td><input type="checkbox" data-id="' + esc(s.id) + '"' + checked + '></td>'
             + '<td>' + esc(s.name) + '</td>'
-            + '<td><span class="type-badge ' + s.type + '">' + s.type + '</span></td>'
+            + '<td><span class="type-badge ' + s.type + '">' + esc(getSourceTypeLabel(s.type)) + '</span></td>'
             + '<td>'
             + '<button class="btn-sm" onclick="showEditForm(\'' + esc(s.id) + '\')" style="margin-right:4px">Edit</button>'
             + '<button class="btn-sm" onclick="deleteSource(\'' + esc(s.id) + '\')">Del</button>'
@@ -569,8 +984,10 @@ function showEditForm(id) {
     var info = {};
     try { info = JSON.parse(src.connectionInfo || '{}'); } catch(e) {}
 
-    if (src.type === 'dctx' || src.type === 'sqlite') {
-        document.getElementById('formFilePath').value = info.filePath || '';
+    if (src.type === 'dctx' || src.type === 'sqlite' || src.type === 'tps') {
+        document.getElementById('formFilePath').value = src.type === 'tps'
+            ? (info.folderPath || info.filePath || '')
+            : (info.filePath || '');
     } else {
         document.getElementById('formServer').value = info.server || '';
         document.getElementById('formDatabase').value = info.database || '';
@@ -599,16 +1016,21 @@ function clearFormFields() {
 
 function onTypeChange() {
     var type = document.getElementById('formType').value;
-    var isFile = (type === 'dctx' || type === 'sqlite');
+    var isPath = (type === 'dctx' || type === 'sqlite' || type === 'tps');
     var isServer = (type === 'mssql' || type === 'postgres');
+    var pathConfig = getPathFieldConfig(type);
 
-    document.getElementById('fieldFilePath').style.display = isFile ? '' : 'none';
+    document.getElementById('fieldFilePath').style.display = isPath ? '' : 'none';
+    document.getElementById('fieldTpsHint').style.display = type === 'tps' ? '' : 'none';
     document.getElementById('fieldServer').style.display = isServer ? '' : 'none';
     document.getElementById('fieldPort').style.display = type === 'postgres' ? '' : 'none';
     document.getElementById('fieldDatabase').style.display = isServer ? '' : 'none';
     document.getElementById('fieldUsername').style.display = isServer ? '' : 'none';
     document.getElementById('fieldPassword').style.display = isServer ? '' : 'none';
     document.getElementById('fieldTestConn').style.display = isServer ? '' : 'none';
+    document.getElementById('labelFilePath').textContent = pathConfig.label;
+    document.getElementById('formFilePath').placeholder = pathConfig.placeholder;
+    document.getElementById('btnBrowsePath').textContent = pathConfig.buttonText;
     document.getElementById('testConnResult').textContent = '';
     document.getElementById('testConnResult').className = 'status-text';
 }
@@ -620,9 +1042,16 @@ function saveSource() {
     if (!name) { document.getElementById('formName').focus(); return; }
 
     var connInfo = {};
-    if (type === 'dctx' || type === 'sqlite') {
-        connInfo.filePath = document.getElementById('formFilePath').value.trim();
-        if (!connInfo.filePath) { document.getElementById('formFilePath').focus(); return; }
+    if (type === 'dctx' || type === 'sqlite' || type === 'tps') {
+        var selectedPath = document.getElementById('formFilePath').value.trim();
+        if (!selectedPath) { document.getElementById('formFilePath').focus(); return; }
+
+        if (type === 'tps') {
+            connInfo.folderPath = selectedPath;
+            connInfo.recursive = true;
+        } else {
+            connInfo.filePath = selectedPath;
+        }
     } else {
         connInfo.server = document.getElementById('formServer').value.trim();
         connInfo.database = document.getElementById('formDatabase').value.trim();
@@ -683,6 +1112,42 @@ if (window.chrome && window.chrome.webview) {
             sources = msg.items || [];
             renderSources();
         }
+        if (msg.type === 'previewerLaunchError') {
+            window.alert(msg.message || 'Could not open TPS previewer.');
+        }
+        if (msg.type === 'setTpsPreviewTables') {
+            previewTables = msg.tables || [];
+            if (!previewTables.length) {
+                document.getElementById('previewStatus').className = 'status-text error';
+                document.getElementById('previewStatus').textContent = 'No previewable TPS tables found.';
+                document.getElementById('previewGridContainer').className = 'empty-msg';
+                document.getElementById('previewGridContainer').textContent = 'No TPS tables are available for preview.';
+            } else {
+                renderPreviewTableOptions();
+                document.getElementById('previewStatus').className = 'status-text indexed';
+                document.getElementById('previewStatus').textContent = previewTables.length + ' tables available.';
+                document.getElementById('previewGridContainer').className = 'empty-msg';
+                document.getElementById('previewGridContainer').textContent = 'Click Load to fetch rows.';
+                loadPreviewRows();
+            }
+        }
+        if (msg.type === 'setTpsPreviewRows') {
+            document.getElementById('btnPreviewLoad').disabled = false;
+            document.getElementById('btnPreviewLoad').textContent = 'Load';
+            document.getElementById('previewStatus').className = 'status-text indexed';
+            document.getElementById('previewStatus').textContent = (msg.result.rowCount || 0) + ' rows loaded.';
+            document.getElementById('previewMeta').textContent = (msg.result.schemaTableName || msg.result.name || '')
+                + (msg.result.sourceFile ? ' - ' + msg.result.sourceFile : '');
+            renderPreviewRows(msg.result);
+        }
+        if (msg.type === 'setTpsPreviewError') {
+            document.getElementById('btnPreviewLoad').disabled = false;
+            document.getElementById('btnPreviewLoad').textContent = 'Load';
+            document.getElementById('previewStatus').className = 'status-text error';
+            document.getElementById('previewStatus').textContent = msg.message || 'Preview failed.';
+            document.getElementById('previewGridContainer').className = 'empty-msg';
+            document.getElementById('previewGridContainer').textContent = 'Preview failed.';
+        }
         if (msg.type === 'setGlobalSources') {
             globalSources = msg.items || [];
             linkedIds = msg.linkedIds || [];
@@ -698,8 +1163,15 @@ if (window.chrome && window.chrome.webview) {
                 if (btnEl) { btnEl.disabled = false; btnEl.textContent = 'Index'; }
             } else {
                 if (statusEl) {
-                    statusEl.className = 'status-text indexed';
-                    statusEl.textContent = (st.tableCount || 0) + ' tables';
+                    var sourceState = {
+                        indexed: true,
+                        tableCount: st.tableCount || 0,
+                        skippedFileCount: st.skippedFileCount || 0,
+                        skippedFiles: st.skippedFiles || ''
+                    };
+                    statusEl.className = 'status-text ' + getStatusClass(sourceState);
+                    statusEl.textContent = getStatusText(sourceState);
+                    statusEl.title = getStatusTitle(sourceState);
                 }
                 if (dateEl) dateEl.textContent = formatDate(st.lastIndexed);
                 if (btnEl) { btnEl.disabled = false; btnEl.textContent = 'Index'; }
@@ -709,8 +1181,11 @@ if (window.chrome && window.chrome.webview) {
                         sources[i].indexed = true;
                         sources[i].tableCount = st.tableCount;
                         sources[i].lastIndexed = st.lastIndexed;
+                        sources[i].skippedFileCount = st.skippedFileCount || 0;
+                        sources[i].skippedFiles = st.skippedFiles || '';
                     }
                 }
+                renderSources();
             }
         }
         if (msg.type === 'testConnectionResult') {
@@ -775,16 +1250,21 @@ function esc(s) {
 }
 
 // Signal ready
-window.addEventListener('load', function() { send('schemaSourcesReady'); });
+window.addEventListener('load', function() {
+    initPreviewDragging();
+    send('schemaSourcesReady');
+});
 
 // Close modal on Escape
 document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') {
-        if (document.getElementById('formView').classList.contains('visible')) {
-            cancelForm();
-        } else if (document.getElementById('manageModal').classList.contains('visible')) {
-            closeManageModal();
-        }
+        if (e.key === 'Escape') {
+            if (document.getElementById('formView').classList.contains('visible')) {
+                cancelForm();
+            } else if (document.getElementById('previewModal').classList.contains('visible')) {
+                closePreviewModal();
+            } else if (document.getElementById('manageModal').classList.contains('visible')) {
+                closeManageModal();
+            }
     }
 });
 </script>
